@@ -12,7 +12,7 @@ import time
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable
 
 import cv2
 import numpy as np
@@ -214,6 +214,21 @@ def _kind_for_model_label(label: str, settings: ExtractionSettings) -> str:
     return mapping.get(label, "SPEECH")
 
 
+def _box_center_inside(inner: tuple[int, int, int, int], outer: tuple[int, int, int, int]) -> bool:
+    ix0, iy0, ix1, iy1 = inner
+    ox0, oy0, ox1, oy1 = outer
+    cx, cy = (ix0 + ix1) / 2, (iy0 + iy1) / 2
+    return ox0 <= cx <= ox1 and oy0 <= cy <= oy1
+
+
+def _box_gap(first: tuple[int, int, int, int], second: tuple[int, int, int, int]) -> float:
+    ax0, ay0, ax1, ay1 = first
+    bx0, by0, bx1, by1 = second
+    dx = max(ax0 - bx1, bx0 - ax1, 0)
+    dy = max(ay0 - by1, by0 - ay1, 0)
+    return float((dx * dx + dy * dy) ** 0.5)
+
+
 def _box_iou(first: tuple[int, int, int, int], second: tuple[int, int, int, int]) -> float:
     ax0, ay0, ax1, ay1 = first
     bx0, by0, bx1, by1 = second
@@ -233,7 +248,12 @@ def _sort_lines(lines: list[ExtractedLine], order: str) -> list[ExtractedLine]:
     return sorted(lines, key=lambda line: (line.page, line.bbox[1], line.bbox[0]))
 
 
-def extract_chapter(image_paths: list[str], settings: ExtractionSettings, output_name: str = "chapter_extracted") -> ExtractionResult:
+def extract_chapter(
+    image_paths: list[str],
+    settings: ExtractionSettings,
+    output_name: str = "chapter_extracted",
+    progress_callback: Callable[[int, int, int], None] | None = None,
+) -> ExtractionResult:
     started = time.perf_counter()
     comic_detector = _load_comic_detector(settings)
     segmenter = _load_segmenter(settings)
@@ -266,6 +286,14 @@ def extract_chapter(image_paths: list[str], settings: ExtractionSettings, output
                     kind = {"text_bubble": "SPEECH", "text_free": "SIDE_TEXT"}.get(
                         detection.label, "SPEECH"
                     )
+                    # text_free is often emitted on top of a text_bubble box by
+                    # this checkpoint. Prefer the in-bubble text classification.
+                    if detection.label == "text_free" and any(
+                        item[1] == "text_bubble"
+                        and (_box_iou(item[3], detection.bbox) >= 0.05 or _box_center_inside(detection.bbox, item[3]))
+                        for item in candidates
+                    ):
+                        continue
                     text_boxes.append(detection.bbox)
                     candidates.append((index, detection.label, kind, detection.bbox, None))
 
@@ -290,9 +318,16 @@ def extract_chapter(image_paths: list[str], settings: ExtractionSettings, output
             if sfx_detector is not None:
                 sfx_boxes = sfx_detector.predict(image)
                 for candidate in sfx_boxes:
-                    candidates = [
-                        item for item in candidates if _box_iou(item[3], candidate.bbox) < 0.35
-                    ]
+                    # The SFX checkpoint is intentionally conservative. Its old
+                    # low threshold caused ordinary dialogue to be relabeled SFX.
+                    # Never replace a comic detector text region with SFX.
+                    overlaps_text = any(
+                        _box_iou(item[3], candidate.bbox) >= 0.10
+                        or _box_center_inside(candidate.bbox, item[3])
+                        for item in candidates
+                    )
+                    if candidate.confidence < max(settings.sfx_confidence, 0.70) or overlaps_text:
+                        continue
                     candidates.append((len(candidates), f"sfx:{candidate.label}", "SFX", candidate.bbox, None))
 
             for index, model_label, kind, bbox, mask in candidates:
@@ -310,9 +345,14 @@ def extract_chapter(image_paths: list[str], settings: ExtractionSettings, output
                         bbox=bbox,
                     )
                 )
-            extracted.extend(_sort_lines(page_lines, settings.reading_order))
+            sorted_lines = _sort_lines(page_lines, settings.reading_order)
+            extracted.extend(sorted_lines)
+            if progress_callback is not None:
+                progress_callback(page_number, len(image_paths), len(extracted))
         except Exception:
             failed += 1
+            if progress_callback is not None:
+                progress_callback(page_number, len(image_paths), len(extracted))
 
     pages: dict[int, list[ExtractedLine]] = {}
     for line in extracted:
@@ -321,7 +361,18 @@ def extract_chapter(image_paths: list[str], settings: ExtractionSettings, output
     output: list[str] = []
     for page in sorted(pages):
         output.append(f"--- Page {page} ---")
-        output.extend(format_line(line.kind, line.text) for line in pages[page])
+        previous_line: ExtractedLine | None = None
+        for line in pages[page]:
+            sequence = 1
+            if (
+                previous_line is not None
+                and previous_line.kind == line.kind
+                and line.kind in {"SPEECH", "THOUGHT", "SQUARE", "CAPTION"}
+                and _box_gap(previous_line.bbox, line.bbox) <= 12
+            ):
+                sequence = 2
+            output.append(format_line(line.kind, line.text, sequence))
+            previous_line = line
         output.append("")
 
     return ExtractionResult(
@@ -357,7 +408,7 @@ def settings_from_env() -> ExtractionSettings:
         ocr_languages=os.getenv("OCR_LANGUAGES", "kor+eng+jpn"),
         ocr_config=os.getenv("OCR_CONFIG", "--oem 1 --psm 6"),
         model_confidence=float(os.getenv("MODEL_CONFIDENCE", "0.35")),
-        sfx_confidence=float(os.getenv("SFX_CONFIDENCE", "0.25")),
+        sfx_confidence=float(os.getenv("SFX_CONFIDENCE", "0.70")),
         comic_confidence=float(os.getenv("COMIC_CONFIDENCE", "0.25")),
         image_size=int(os.getenv("MANGA_IMAGE_SIZE", "1280")),
         reading_order=os.getenv("READING_ORDER", "top_to_bottom"),

@@ -43,10 +43,14 @@ DEFAULT_MODEL_LABEL_MAP: dict[str, str] = {
 }
 
 
-def format_line(kind: str, text: str) -> str:
-    """Prefix OCR text with the exact marker requested by the user."""
+DOUBLE_MARKER_KINDS = {"SPEECH", "THOUGHT", "SQUARE", "CAPTION"}
+
+
+def format_line(kind: str, text: str, sequence: int = 1) -> str:
+    """Prefix OCR text with the requested marker, including paired bubbles."""
     spec = LABELS.get(kind, LABELS["SIDE_TEXT"])
-    return f"{spec.marker} {text.strip()}"
+    marker = "//:" if kind in DOUBLE_MARKER_KINDS and sequence >= 2 else spec.marker
+    return f"{marker} {text.strip()}"
 
 
 def mapping_document() -> str:

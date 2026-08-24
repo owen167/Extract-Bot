@@ -23,6 +23,8 @@ class BotCoreTests(unittest.TestCase):
         self.assertEqual(format_line("SPEECH", "반응이 바로 오네."), '\"\": 반응이 바로 오네.')
         self.assertEqual(format_line("SYSTEM", "그 정령석을 내게 맡기게!"), "%: 그 정령석을 내게 맡기게!")
         self.assertEqual(format_line("THOUGHT", "관심 있는 정도가 아니었네."), "(): 관심 있는 정도가 아니었네.")
+        self.assertEqual(format_line("SPEECH", "second bubble", 2), "//: second bubble")
+        self.assertEqual(format_line("SQUARE", "second square", 2), "//: second square")
 
     def test_drive_url_is_extracted_from_command_text(self) -> None:
         text = "Chapter 0041 https://drive.google.com/file/d/abc123/view?usp=sharing"
@@ -66,10 +68,13 @@ class BotCoreTests(unittest.TestCase):
                 "min_text_length": 1,
                 "model_label_map": None,
             })()
+            progress: list[tuple[int, int, int]] = []
             with patch("extractor._load_segmenter", return_value=FakeSegmenter()), patch(
                 "extractor._ocr_crop", side_effect=["lower text", "upper text"]
             ):
-                result = extract_chapter([str(image_path)], settings, "chapter")
+                result = extract_chapter(
+                    [str(image_path)], settings, "chapter", lambda page, total, regions: progress.append((page, total, regions))
+                )
 
             self.assertEqual(result.total_images, 1)
             self.assertEqual(result.failed_images, 0)
@@ -77,6 +82,7 @@ class BotCoreTests(unittest.TestCase):
             self.assertIn("(): upper text", result.output_text)
             self.assertIn('"": lower text', result.output_text)
             self.assertLess(result.output_text.index("upper text"), result.output_text.index("lower text"))
+            self.assertEqual(progress, [(1, 1, 2)])
 
     def test_zip_expansion_is_safe_and_sorted(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

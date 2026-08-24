@@ -62,11 +62,20 @@ def error_embed(message: str) -> discord.Embed:
     return brand_embed("❌ Extraction Failed", message, discord.Color.red().value)
 
 
-def progress_embed() -> discord.Embed:
+def progress_embed(current: int = 0, total: int = 0, phase: str = "Preparing input") -> discord.Embed:
+    if total:
+        percent = max(0, min(100, int(current * 100 / total)))
+        filled = int(percent / 10)
+        bar = "█" * filled + "░" * (10 - filled)
+        progress = f"`{bar}` **{percent}%**\nPage **{current}/{total}**"
+    else:
+        progress = "`░░░░░░░░░░` **0%**\nPreparing pages..."
     return brand_embed(
         "⏳ Extraction in Progress",
         "Your chapter is being downloaded, segmented, and processed with OCR. Please wait...",
         discord.Color.gold().value,
+    ).add_field(name="Progress", value=progress, inline=False).add_field(
+        name="Current step", value=f"`{phase}`", inline=False
     )
 
 
@@ -126,11 +135,30 @@ async def run_extraction(
             chapter_name = output_name.strip() or (
                 Path(attachments[0].filename).stem if attachments else "drive_chapter"
             )
+            loop = asyncio.get_running_loop()
+            total_pages = len(image_paths)
+            last_update = {"page": 0, "time": 0.0}
+
+            def report_progress(page: int, total: int, _regions: int) -> None:
+                now = time.perf_counter()
+                if page != total and now - last_update["time"] < 0.25:
+                    return
+                last_update.update(page=page, time=now)
+                embed = progress_embed(page, total, "Detecting regions and running OCR")
+                loop.call_soon_threadsafe(
+                    asyncio.create_task,
+                    progress_message.edit(embed=embed),
+                )
+
+            await progress_message.edit(
+                embed=progress_embed(0, total_pages, "Detecting regions and running OCR")
+            )
             result = await asyncio.to_thread(
                 extract_chapter,
                 [str(path) for path in image_paths],
                 settings,
                 chapter_name,
+                report_progress,
             )
             output_path = Path(work_dir) / f"{result.output_name}.txt"
             output_path.write_text(result.output_text, encoding="utf-8")

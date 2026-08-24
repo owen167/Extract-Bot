@@ -1,9 +1,12 @@
 .env
 *.pyc
 __pycache__/
+tests/run_chapter_extraction.py
+tests/inspect_chapter_images.py
 .venv/
 venv/
 models/
+testdata/
 runs/
 output/
 work/
