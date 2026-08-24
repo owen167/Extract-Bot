@@ -21,6 +21,9 @@ from labels import DEFAULT_MODEL_LABEL_MAP, format_line
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
 AUTO_OCR_LANGUAGES = "ara+chi_sim+chi_tra+deu+ell+eng+fra+heb+hin+ind+ita+jpn+kor+nld+pol+por+rus+spa+srp+tha+tur+ukr+urd+vie"
+OCR_HIDDEN_DIRECTIONAL_CHARS = dict.fromkeys(
+    ord(char) for char in "\u200b\u200c\u200d\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2069\ufeff"
+)
 
 
 @dataclass
@@ -218,6 +221,9 @@ def _ocr_crop(crop_bgr: np.ndarray, languages: str, config: str, min_confidence:
                 continue
             text = pytesseract.image_to_string(crop_rgb, lang=language, config=candidate_config)
             text = " ".join(line.strip() for line in text.splitlines() if line.strip()).strip()
+            # Remove invisible bidi/zero-width controls that make Arabic appear
+            # split or surrounded by unexplained marks in Discord/TXT output.
+            text = text.translate(OCR_HIDDEN_DIRECTIONAL_CHARS)
             # Backslash is never a manga glyph and is a common Tesseract artifact.
             text = re.sub(r"\\", "", text).strip()
 
@@ -261,7 +267,7 @@ def _ocr_crop(crop_bgr: np.ndarray, languages: str, config: str, min_confidence:
     preferred_text, preferred_confidence = run_language(preferred)
     # Prefer the single-script transcription when it is usable. This keeps
     # Korean text Korean instead of appending accidental Japanese/Latin glyphs.
-    if preferred_text and preferred_confidence >= max(min_confidence, combined_confidence - 15.0):
+    if preferred_text and preferred_confidence >= max(min_confidence, combined_confidence - 25.0):
         return preferred_text
     return combined_text
 
@@ -287,6 +293,8 @@ def _is_plausible_text(text: str, crop_bgr: np.ndarray, kind: str) -> bool:
     # A single accidental glyph surrounded by OCR-number/symbol noise is not
     # a multilingual transcription. Do not apply a language-specific filter.
     if letters <= 1 and digits >= 2 and symbols >= 2:
+        return False
+    if len(cleaned) >= 8 and letters <= 1 and digits + symbols > 4:
         return False
     if kind == "SFX" and not any(char.isalpha() for char in cleaned):
         return False
