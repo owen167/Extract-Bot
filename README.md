@@ -6,17 +6,7 @@ All bot-facing messages are in English and use Discord Embeds. The final result 
 
 ## Command
 
-Attach page images or one `.zip`/`.cbz` chapter archive and send:
-
-```text
-!extract
-```
-
-You can optionally provide an output name:
-
-```text
-!extract Chapter 0041
-```
+Use the registered Slash Command `/extract` in Discord. The command accepts up to ten page attachments plus an optional public Google Drive file/folder URL and an optional output name. It supports page images, ZIP/CBZ archives, and nested folders inside archives. There are no legacy prefix commands.
 
 Supported page formats are PNG, JPG, JPEG, WEBP, BMP, TIF, and TIFF. The bot preserves page sections in this format:
 
@@ -67,7 +57,8 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-Set `DISCORD_TOKEN` and `COMIC_MODEL_PATH` in `.env`. `MANGA_MODEL_PATH` is optional and can provide the legacy Manga-Segment YOLO checkpoint; `SFX_MODEL_PATH` is also optional. The `.env` file is ignored by Git and must never be committed. All model checkpoints are ignored; store them locally or provide them through your deployment's secret/file storage. The comic and SFX checkpoints can be downloaded from their Hugging Face links above.
+Set `DISCORD_TOKEN` and `COMIC_MODEL_PATH` in `.env`. If `DISCORD_GUILD_ID` is set, the `/extract` command is synchronized to that server immediately; otherwise it is synchronized globally.
+ `MANGA_MODEL_PATH` is optional and can provide the legacy Manga-Segment YOLO checkpoint; `SFX_MODEL_PATH` is also optional. The `.env` file is ignored by Git and must never be committed. All model checkpoints are ignored; store them locally or provide them through your deployment's secret/file storage. The comic and SFX checkpoints can be downloaded from their Hugging Face links above.
 
 Run the bot:
 
@@ -75,7 +66,7 @@ Run the bot:
 python bot.py
 ```
 
-The Discord application must have the **Message Content Intent** enabled. The bot also needs permission to read messages, view channels, send messages, attach files, and manage messages so it can delete the original extraction command after completion.
+The Discord application needs the `applications.commands` scope and permission to view channels, send messages, attach files, and manage messages. Slash commands do not require the Message Content Intent. The bot deletes its temporary progress response after completion; Discord does not expose a user-authored slash-command message for deletion.
 
 ## Architecture
 

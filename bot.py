@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import discord
+from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
 
@@ -19,7 +20,6 @@ from sources import download_drive_url, extract_urls
 
 load_dotenv()
 
-PREFIX = os.getenv("DISCORD_PREFIX", "!")
 MAX_ATTACHMENT_MB = int(os.getenv("MAX_ATTACHMENT_MB", "100"))
 MAX_ATTACHMENT_BYTES = MAX_ATTACHMENT_MB * 1024 * 1024
 EXTRACTION_LOCK = asyncio.Lock()
@@ -74,50 +74,33 @@ def progress_embed() -> discord.Embed:
     )
 
 
-async def safe_delete(message: discord.Message) -> None:
+async def safe_delete(message: discord.Message | None) -> None:
+    if message is None:
+        return
     try:
         await message.delete()
     except (discord.NotFound, discord.Forbidden, discord.HTTPException):
         pass
 
 
-intents = discord.Intents.default()
-intents.message_content = True
-bot = commands.Bot(command_prefix=PREFIX, intents=intents, help_command=None)
+async def send_error(interaction: discord.Interaction, message: str) -> None:
+    embed = error_embed(message)
+    if interaction.response.is_done():
+        await interaction.followup.send(embed=embed)
+    else:
+        await interaction.response.send_message(embed=embed)
 
 
-@bot.event
-async def on_ready() -> None:
-    print(f"Logged in as {bot.user} (id={bot.user.id})")
-
-
-@bot.command(name="extract")
-async def extract_command(ctx: commands.Context, *, output_name: str = "") -> None:
-    """Extract OCR text from image, ZIP, or CBZ attachments."""
-    attachments = list(ctx.message.attachments)
-    drive_urls = extract_urls(output_name)
-    if not attachments and not drive_urls:
-        await ctx.send(
-            embed=error_embed(
-                f"Attach page images, a `.zip`/`.cbz` chapter file, or include a public Google Drive file/folder link with your `{PREFIX}extract` command."
-            )
-        )
-        return
-
-    oversized = [attachment.filename for attachment in attachments if attachment.size > MAX_ATTACHMENT_BYTES]
-    if oversized:
-        names = ", ".join(f"`{name}`" for name in oversized[:5])
-        await ctx.send(
-            embed=error_embed(
-                f"These attachments exceed the **{MAX_ATTACHMENT_MB} MB** limit: {names}"
-            )
-        )
-        return
-
-    progress_message = await ctx.send(embed=progress_embed())
+async def run_extraction(
+    interaction: discord.Interaction,
+    attachments: list[discord.Attachment],
+    drive_urls: list[str],
+    output_name: str,
+    progress_message: discord.Message,
+) -> None:
+    """Download inputs, run OCR, delete the progress message, and send the result."""
     started = time.perf_counter()
     work_dir = tempfile.mkdtemp(prefix="extract-bot-")
-    output_path: Path | None = None
 
     try:
         async with EXTRACTION_LOCK:
@@ -139,28 +122,26 @@ async def extract_command(ctx: commands.Context, *, output_name: str = "") -> No
 
             image_paths = expand_inputs(downloaded, str(Path(work_dir) / "expanded"))
             if not image_paths:
-                raise ValueError("No supported page images were found in the attachments.")
+                raise ValueError(
+                    "No supported page images were found. Use PNG/JPG/WEBP images or a ZIP/CBZ chapter."
+                )
 
             settings = settings_from_env()
-            clean_name = output_name.strip()
-            for drive_url in drive_urls:
-                clean_name = clean_name.replace(drive_url, "").strip()
-            chapter_name = clean_name or (Path(attachments[0].filename).stem if attachments else "drive_chapter")
+            chapter_name = output_name.strip() or (
+                Path(attachments[0].filename).stem if attachments else "drive_chapter"
+            )
             result = await asyncio.to_thread(
                 extract_chapter,
                 [str(path) for path in image_paths],
                 settings,
                 chapter_name,
             )
-
             output_path = Path(work_dir) / f"{result.output_name}.txt"
             output_path.write_text(result.output_text, encoding="utf-8")
 
-        # The request message is deleted only after processing has completed.
-        await safe_delete(ctx.message)
         await safe_delete(progress_message)
-        await ctx.send(
-            content=ctx.author.mention,
+        await interaction.followup.send(
+            content=interaction.user.mention,
             embed=stats_embed(result, result.output_name),
             file=discord.File(output_path, filename=f"{result.output_name}.txt"),
             allowed_mentions=discord.AllowedMentions(users=True),
@@ -168,10 +149,9 @@ async def extract_command(ctx: commands.Context, *, output_name: str = "") -> No
     except Exception as exc:
         elapsed = time.perf_counter() - started
         print(f"Extraction error after {elapsed:.2f}s: {type(exc).__name__}: {exc}")
-        await safe_delete(ctx.message)
         await safe_delete(progress_message)
-        await ctx.send(
-            content=ctx.author.mention,
+        await interaction.followup.send(
+            content=interaction.user.mention,
             embed=error_embed(
                 f"The extraction could not be completed.\n\n**Reason:** `{type(exc).__name__}: {exc}`"
             ),
@@ -181,14 +161,100 @@ async def extract_command(ctx: commands.Context, *, output_name: str = "") -> No
         shutil.rmtree(work_dir, ignore_errors=True)
 
 
+intents = discord.Intents.default()
+intents.message_content = False
+bot = commands.Bot(command_prefix=commands.when_mentioned, intents=intents, help_command=None)
+_tree_synced = False
+
+
 @bot.event
-async def on_command_error(ctx: commands.Context, error: commands.CommandError) -> None:
-    if isinstance(error, commands.CommandNotFound):
+async def on_ready() -> None:
+    global _tree_synced
+    if not _tree_synced:
+        guild_id = os.getenv("DISCORD_GUILD_ID", "").strip()
+        if guild_id:
+            guild = discord.Object(id=int(guild_id))
+            bot.tree.copy_global_to(guild=guild)
+            synced = await bot.tree.sync(guild=guild)
+            print(f"Synced {len(synced)} slash command(s) to guild {guild_id}.")
+        else:
+            synced = await bot.tree.sync()
+            print(f"Synced {len(synced)} global slash command(s).")
+        _tree_synced = True
+    print(f"Logged in as {bot.user} (id={bot.user.id})")
+
+
+@app_commands.describe(
+    source_url="A public Google Drive file or folder URL",
+    chapter_name="Optional output filename without extension",
+    page_1="Page image or ZIP/CBZ file",
+    page_2="Additional page image",
+    page_3="Additional page image",
+    page_4="Additional page image",
+    page_5="Additional page image",
+    page_6="Additional page image",
+    page_7="Additional page image",
+    page_8="Additional page image",
+    page_9="Additional page image",
+    page_10="Additional page image",
+)
+@app_commands.command(name="extract", description="Extract manga/manhwa text from images, archives, or Drive")
+async def extract_command(
+    interaction: discord.Interaction,
+    source_url: str | None = None,
+    chapter_name: str | None = None,
+    page_1: discord.Attachment | None = None,
+    page_2: discord.Attachment | None = None,
+    page_3: discord.Attachment | None = None,
+    page_4: discord.Attachment | None = None,
+    page_5: discord.Attachment | None = None,
+    page_6: discord.Attachment | None = None,
+    page_7: discord.Attachment | None = None,
+    page_8: discord.Attachment | None = None,
+    page_9: discord.Attachment | None = None,
+    page_10: discord.Attachment | None = None,
+) -> None:
+    attachments = [
+        attachment
+        for attachment in (
+            page_1,
+            page_2,
+            page_3,
+            page_4,
+            page_5,
+            page_6,
+            page_7,
+            page_8,
+            page_9,
+            page_10,
+        )
+        if attachment is not None
+    ]
+    drive_urls = extract_urls(source_url or "")
+
+    if not attachments and not drive_urls:
+        await send_error(
+            interaction,
+            "Provide a public Google Drive file/folder URL or attach at least one image, ZIP, or CBZ file.",
+        )
         return
-    if isinstance(error, commands.MissingRequiredArgument):
-        await ctx.send(embed=error_embed("The command is missing a required argument."))
+
+    oversized = [attachment.filename for attachment in attachments if attachment.size > MAX_ATTACHMENT_BYTES]
+    if oversized:
+        names = ", ".join(f"`{name}`" for name in oversized[:5])
+        await send_error(
+            interaction,
+            f"These attachments exceed the **{MAX_ATTACHMENT_MB} MB** limit: {names}",
+        )
         return
-    await ctx.send(embed=error_embed(f"Unexpected bot error: `{type(error).__name__}`"))
+
+    await interaction.response.send_message(embed=progress_embed())
+    progress_message = await interaction.original_response()
+    clean_name = (chapter_name or "").strip()
+    await run_extraction(interaction, attachments, drive_urls, clean_name, progress_message)
+
+
+bot.tree.add_command(extract_command)
 
 
 def main() -> None:

@@ -7,8 +7,8 @@ class BotImportTests(unittest.TestCase):
     def test_bot_module_imports_without_login(self) -> None:
         import bot
 
-        self.assertEqual(bot.PREFIX, "!")
         self.assertIsNotNone(bot.bot)
+        self.assertEqual([command.name for command in bot.bot.tree.get_commands()], ["extract"])
 
 
 if __name__ == "__main__":
