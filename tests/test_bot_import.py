@@ -8,7 +8,12 @@ class BotImportTests(unittest.TestCase):
         import bot
 
         self.assertIsNotNone(bot.bot)
-        self.assertEqual([command.name for command in bot.bot.tree.get_commands()], ["extract"])
+        commands = bot.bot.tree.get_commands()
+        self.assertEqual([command.name for command in commands], ["extract"])
+        self.assertEqual(
+            [parameter.name for parameter in commands[0].parameters],
+            ["image", "zip_file", "drive_url", "chapter_name"],
+        )
 
 
 if __name__ == "__main__":

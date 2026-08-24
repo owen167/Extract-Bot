@@ -54,11 +54,7 @@ def stats_embed(result, chapter_name: str) -> discord.Embed:
         value=f"• Total: **{result.elapsed_seconds:.2f}s**",
         inline=False,
     )
-    embed.add_field(
-        name="📄 Output",
-        value=f"`{result.output_name}.txt`",
-        inline=False,
-    )
+    embed.add_field(name="📄 Output", value=f"`{result.output_name}.txt`", inline=False)
     return embed
 
 
@@ -98,7 +94,7 @@ async def run_extraction(
     output_name: str,
     progress_message: discord.Message,
 ) -> None:
-    """Download inputs, run OCR, delete the progress message, and send the result."""
+    """Download inputs, run OCR, remove progress state, and send the result."""
     started = time.perf_counter()
     work_dir = tempfile.mkdtemp(prefix="extract-bot-")
 
@@ -180,62 +176,41 @@ async def on_ready() -> None:
         else:
             synced = await bot.tree.sync()
             print(f"Synced {len(synced)} global slash command(s).")
+            for guild in bot.guilds:
+                bot.tree.copy_global_to(guild=guild)
+                guild_synced = await bot.tree.sync(guild=guild)
+                print(f"Synced {len(guild_synced)} slash command(s) to guild {guild.id}.")
         _tree_synced = True
     print(f"Logged in as {bot.user} (id={bot.user.id})")
 
 
 @app_commands.describe(
-    source_url="A public Google Drive file or folder URL",
-    chapter_name="Optional output filename without extension",
-    page_1="Page image or ZIP/CBZ file",
-    page_2="Additional page image",
-    page_3="Additional page image",
-    page_4="Additional page image",
-    page_5="Additional page image",
-    page_6="Additional page image",
-    page_7="Additional page image",
-    page_8="Additional page image",
-    page_9="Additional page image",
-    page_10="Additional page image",
+    image="Image to extract (optional)",
+    zip_file="ZIP/CBZ file containing images (optional)",
+    drive_url="Public Google Drive file or folder link (optional)",
+    chapter_name="Output filename without extension (optional)",
 )
-@app_commands.command(name="extract", description="Extract manga/manhwa text from images, archives, or Drive")
+@app_commands.command(
+    name=app_commands.locale_str("extract", ar="استخراج"),
+    description=app_commands.locale_str(
+        "Extract manga/manhwa text from an image, ZIP, or Google Drive folder",
+        ar="استخراج نصوص المانجا والمانهوا من صورة أو ملف مضغوط أو مجلد Google Drive",
+    ),
+)
 async def extract_command(
     interaction: discord.Interaction,
-    source_url: str | None = None,
+    image: discord.Attachment | None = None,
+    zip_file: discord.Attachment | None = None,
+    drive_url: str | None = None,
     chapter_name: str | None = None,
-    page_1: discord.Attachment | None = None,
-    page_2: discord.Attachment | None = None,
-    page_3: discord.Attachment | None = None,
-    page_4: discord.Attachment | None = None,
-    page_5: discord.Attachment | None = None,
-    page_6: discord.Attachment | None = None,
-    page_7: discord.Attachment | None = None,
-    page_8: discord.Attachment | None = None,
-    page_9: discord.Attachment | None = None,
-    page_10: discord.Attachment | None = None,
 ) -> None:
-    attachments = [
-        attachment
-        for attachment in (
-            page_1,
-            page_2,
-            page_3,
-            page_4,
-            page_5,
-            page_6,
-            page_7,
-            page_8,
-            page_9,
-            page_10,
-        )
-        if attachment is not None
-    ]
-    drive_urls = extract_urls(source_url or "")
+    attachments = [attachment for attachment in (image, zip_file) if attachment is not None]
+    drive_urls = extract_urls(drive_url or "")
 
     if not attachments and not drive_urls:
         await send_error(
             interaction,
-            "Provide a public Google Drive file/folder URL or attach at least one image, ZIP, or CBZ file.",
+            "Provide a public Google Drive file/folder link or attach an image, ZIP, or CBZ file.",
         )
         return
 
@@ -250,8 +225,13 @@ async def extract_command(
 
     await interaction.response.send_message(embed=progress_embed())
     progress_message = await interaction.original_response()
-    clean_name = (chapter_name or "").strip()
-    await run_extraction(interaction, attachments, drive_urls, clean_name, progress_message)
+    await run_extraction(
+        interaction,
+        attachments,
+        drive_urls,
+        (chapter_name or "").strip(),
+        progress_message,
+    )
 
 
 bot.tree.add_command(extract_command)

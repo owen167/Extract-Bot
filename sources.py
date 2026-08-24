@@ -47,7 +47,6 @@ def download_drive_url(url: str, destination_dir: str) -> list[str]:
             output=str(folder_dir),
             quiet=True,
             use_cookies=False,
-            remaining_ok=True,
         )
         if not downloaded:
             raise RuntimeError(
