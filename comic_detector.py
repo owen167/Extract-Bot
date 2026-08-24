@@ -72,6 +72,8 @@ class ComicDetector:
             y0 = max(0, min(y0, tile_height - 1))
             x1 = max(x0 + 1, min(x1, tile_width))
             y1 = max(y0 + 1, min(y1, tile_height))
+            if x1 - x0 < 8 or y1 - y0 < 8:
+                continue
             detections.append(
                 ComicDetection(
                     label=self.LABELS.get(int(label_id), "unknown"),

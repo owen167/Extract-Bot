@@ -37,6 +37,11 @@ def classify_bubble_shape(crop_bgr: np.ndarray) -> str:
         return "SPEECH"
 
     x, y, width, height = cv2.boundingRect(contour)
+    # A contour touching the crop edge is usually an incomplete panel/bubble
+    # border caused by a detector crop. It cannot reliably prove a starburst.
+    crop_height, crop_width = crop_bgr.shape[:2]
+    if x <= 2 or y <= 2 or x + width >= crop_width - 2 or y + height >= crop_height - 2:
+        return "SPEECH"
     bbox_area = float(max(1, width * height))
     gray = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
     edge_map = cv2.Canny(cv2.GaussianBlur(gray, (5, 5), 0), 35, 120)

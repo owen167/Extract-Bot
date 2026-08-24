@@ -45,6 +45,9 @@ def stats_embed(result, chapter_name: str) -> discord.Embed:
             f"• Total images: **{result.total_images}**\n"
             f"• Bubbles detected: **{result.total_bubbles}**\n"
             f"• Text regions: **{len(result.lines)}**\n"
+            f"• OCR candidates: **{result.text_candidates}**\n"
+            f"• Rejected low-quality: **{result.rejected_low_quality}**\n"
+            f"• Removed duplicates: **{result.rejected_duplicates}**\n"
             f"• Text extracted: **{sum(len(line.text) for line in result.lines)} characters**\n"
             f"• Failed images: **{result.failed_images}**"
         ),

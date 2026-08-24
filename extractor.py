@@ -27,7 +27,7 @@ class ExtractionSettings:
     model_path: str | None = None
     comic_model_path: str | None = None
     sfx_model_path: str | None = None
-    ocr_languages: str = "kor+eng+jpn"
+    ocr_languages: str = "kor"
     ocr_config: str = "--oem 1 --psm 6"
     model_confidence: float = 0.35
     sfx_confidence: float = 0.25
@@ -35,6 +35,7 @@ class ExtractionSettings:
     image_size: int = 1280
     reading_order: str = "top_to_bottom"
     min_text_length: int = 1
+    ocr_min_confidence: float = 15.0
     model_label_map: dict[str, str] | None = None
 
 
@@ -57,6 +58,10 @@ class ExtractionResult:
     failed_images: int
     elapsed_seconds: float
     output_name: str
+    text_candidates: int = 0
+    accepted_ocr: int = 0
+    rejected_low_quality: int = 0
+    rejected_duplicates: int = 0
 
 
 def _load_segmenter(settings: ExtractionSettings):
@@ -167,8 +172,8 @@ def _load_sfx_detector(settings: ExtractionSettings):
     )
 
 
-def _ocr_crop(crop_bgr: np.ndarray, languages: str, config: str) -> str:
-    """Run Tesseract through pytesseract, keeping the dependency optional at import time."""
+def _ocr_crop(crop_bgr: np.ndarray, languages: str, config: str, min_confidence: float = 15.0) -> str:
+    """Run Korean-first Tesseract and select the stronger layout mode by token confidence."""
     try:
         import pytesseract
     except ImportError as exc:
@@ -180,8 +185,65 @@ def _ocr_crop(crop_bgr: np.ndarray, languages: str, config: str) -> str:
     scale = 2 if max(height, width) < 1200 else 1
     if scale > 1:
         crop_rgb = cv2.resize(crop_rgb, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
-    text = pytesseract.image_to_string(crop_rgb, lang=languages, config=config)
-    return " ".join(line.strip() for line in text.splitlines() if line.strip()).strip()
+    configs = [config]
+    if "--psm 6" in config:
+        configs.append(config.replace("--psm 6", "--psm 11"))
+    elif "--psm 11" in config:
+        configs.append(config.replace("--psm 11", "--psm 6"))
+    best_text = ""
+    best_confidence = -1.0
+    for candidate_config in dict.fromkeys(configs):
+        data = pytesseract.image_to_data(
+            crop_rgb,
+            lang=languages,
+            config=candidate_config,
+            output_type=pytesseract.Output.DICT,
+        )
+        confidences: list[float] = []
+        for raw_text, raw_conf in zip(data.get("text", []), data.get("conf", [])):
+            if not str(raw_text).strip():
+                continue
+            try:
+                confidence = float(raw_conf)
+            except (TypeError, ValueError):
+                continue
+            if confidence >= min_confidence:
+                confidences.append(confidence)
+        mean_confidence = sum(confidences) / len(confidences) if confidences else -1.0
+        if mean_confidence < best_confidence:
+            continue
+        text = pytesseract.image_to_string(crop_rgb, lang=languages, config=candidate_config)
+        text = " ".join(line.strip() for line in text.splitlines() if line.strip()).strip()
+        if text:
+            best_text = text
+            best_confidence = mean_confidence
+    return best_text
+
+
+def _is_plausible_text(text: str, crop_bgr: np.ndarray, kind: str) -> bool:
+    """Reject obvious OCR noise from rain, clothing, and empty artwork."""
+    cleaned = re.sub(r"\s+", "", text)
+    if not cleaned or len(cleaned) > 500:
+        return False
+    if len(cleaned) <= 1 and not any("\uac00" <= char <= "\ud7a3" for char in cleaned):
+        return False
+    if kind == "SFX" and len(cleaned) < 2:
+        return False
+    if not any(char.isalpha() or "\uac00" <= char <= "\ud7a3" for char in cleaned):
+        return False
+    digits = sum(char.isdigit() for char in cleaned) / max(1, len(cleaned))
+    symbols = sum(not char.isalnum() for char in cleaned) / max(1, len(cleaned))
+    if digits > 0.15 and symbols > 0.15:
+        return False
+    meaningful = sum(char.isalpha() or char.isdigit() or "\uac00" <= char <= "\ud7a3" for char in cleaned)
+    if meaningful / max(1, len(cleaned)) < 0.45:
+        return False
+    gray = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
+    ink_ratio = float(np.mean(gray < 180))
+    # A mostly empty crop with a one-character OCR result is almost always
+    # decorative texture. Keep speech crops less strict than side/SFX crops.
+    minimum_ink = 0.004 if kind in {"SPEECH", "THOUGHT", "SHOUT", "SQUARE", "CAPTION"} else 0.010
+    return ink_ratio >= minimum_ink
 
 
 def _mask_bbox(mask: np.ndarray, width: int, height: int) -> tuple[int, int, int, int] | None:
@@ -242,6 +304,15 @@ def _box_iou(first: tuple[int, int, int, int], second: tuple[int, int, int, int]
     return intersection / union if union else 0.0
 
 
+def _text_quality_score(text: str) -> float:
+    cleaned = re.sub(r"\s+", "", text)
+    if not cleaned:
+        return 0.0
+    meaningful = sum(char.isalpha() or char.isdigit() or "\uac00" <= char <= "\ud7a3" for char in cleaned)
+    symbols = sum(not char.isalnum() for char in cleaned)
+    return meaningful * (1.0 - symbols / max(1, len(cleaned)))
+
+
 def _sort_lines(lines: list[ExtractedLine], order: str) -> list[ExtractedLine]:
     if order == "left_to_right":
         return sorted(lines, key=lambda line: (line.page, line.bbox[0], line.bbox[1]))
@@ -265,6 +336,9 @@ def extract_chapter(
         )
     extracted: list[ExtractedLine] = []
     total_bubbles = 0
+    text_candidates = 0
+    rejected_low_quality = 0
+    rejected_duplicates = 0
     failed = 0
 
     for page_number, raw_path in enumerate(image_paths, start=1):
@@ -352,10 +426,15 @@ def extract_chapter(
                         continue
                     candidates.append((len(candidates), f"sfx:{candidate.label}", "SFX", candidate.bbox, None))
 
+            text_candidates += len(candidates)
             for index, model_label, kind, bbox, mask in candidates:
                 crop = _masked_crop(image, mask, bbox) if mask is not None else image[bbox[1]:bbox[3], bbox[0]:bbox[2]]
-                text = _ocr_crop(crop, settings.ocr_languages, settings.ocr_config)
-                if len(text) < settings.min_text_length:
+                ocr_config = settings.ocr_config
+                if kind == "SFX":
+                    ocr_config = os.getenv("SFX_OCR_CONFIG", "--oem 1 --psm 11")
+                text = _ocr_crop(crop, settings.ocr_languages, ocr_config, getattr(settings, "ocr_min_confidence", 15.0))
+                if len(text) < settings.min_text_length or not _is_plausible_text(text, crop, kind):
+                    rejected_low_quality += 1
                     continue
                 page_lines.append(
                     ExtractedLine(
@@ -368,7 +447,24 @@ def extract_chapter(
                     )
                 )
             sorted_lines = _sort_lines(page_lines, settings.reading_order)
-            extracted.extend(sorted_lines)
+            deduped_lines: list[ExtractedLine] = []
+            for line in sorted_lines:
+                duplicate_at = next(
+                    (
+                        position
+                        for position, existing in enumerate(deduped_lines)
+                        if existing.kind == line.kind
+                        and (_box_iou(existing.bbox, line.bbox) >= 0.30 or _box_center_inside(line.bbox, existing.bbox) or _box_center_inside(existing.bbox, line.bbox))
+                    ),
+                    None,
+                )
+                if duplicate_at is None:
+                    deduped_lines.append(line)
+                    continue
+                rejected_duplicates += 1
+                if _text_quality_score(line.text) > _text_quality_score(deduped_lines[duplicate_at].text):
+                    deduped_lines[duplicate_at] = line
+            extracted.extend(_sort_lines(deduped_lines, settings.reading_order))
             if progress_callback is not None:
                 progress_callback(page_number, len(image_paths), len(extracted), total_bubbles)
         except Exception:
@@ -405,6 +501,10 @@ def extract_chapter(
         failed_images=failed,
         elapsed_seconds=time.perf_counter() - started,
         output_name=_safe_stem(output_name),
+        text_candidates=text_candidates,
+        accepted_ocr=len(extracted),
+        rejected_low_quality=rejected_low_quality,
+        rejected_duplicates=rejected_duplicates,
     )
 
 
@@ -428,7 +528,7 @@ def settings_from_env() -> ExtractionSettings:
         model_path=model_path,
         comic_model_path=comic_model_path,
         sfx_model_path=sfx_model_path,
-        ocr_languages=os.getenv("OCR_LANGUAGES", "kor+eng+jpn"),
+        ocr_languages=os.getenv("OCR_LANGUAGES", "kor"),
         ocr_config=os.getenv("OCR_CONFIG", "--oem 1 --psm 6"),
         model_confidence=float(os.getenv("MODEL_CONFIDENCE", "0.35")),
         sfx_confidence=float(os.getenv("SFX_CONFIDENCE", "0.70")),
@@ -436,5 +536,6 @@ def settings_from_env() -> ExtractionSettings:
         image_size=int(os.getenv("MANGA_IMAGE_SIZE", "1280")),
         reading_order=os.getenv("READING_ORDER", "top_to_bottom"),
         min_text_length=int(os.getenv("MIN_TEXT_LENGTH", "1")),
+        ocr_min_confidence=float(os.getenv("OCR_MIN_CONFIDENCE", "15")),
         model_label_map=custom_map,
     )
