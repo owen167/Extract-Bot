@@ -241,6 +241,10 @@ async def extract_command(
     drive_url: str | None = None,
     chapter_name: str | None = None,
 ) -> None:
+    # Discord requires an acknowledgement within a few seconds. Defer before
+    # even inspecting attachments or parsing URLs so slow/faulty inputs cannot
+    # produce the generic "Application did not respond" message.
+    await interaction.response.defer()
     attachments = [attachment for attachment in (image, zip_file) if attachment is not None]
     drive_urls = extract_urls(drive_url or "")
 
@@ -260,7 +264,6 @@ async def extract_command(
         )
         return
 
-    await interaction.response.defer()
     progress_message = await interaction.followup.send(
         embed=progress_embed(),
         wait=True,
@@ -272,6 +275,19 @@ async def extract_command(
         (chapter_name or "").strip(),
         progress_message,
     )
+
+
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError) -> None:
+    print(f"Slash command error: {type(error).__name__}: {error}")
+    embed = error_embed("The command could not be started. Please try again with a valid image, ZIP/CBZ, or public Google Drive link.")
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        else:
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+    except (discord.NotFound, discord.Forbidden, discord.HTTPException) as send_error:
+        print(f"Could not send slash command error response: {type(send_error).__name__}: {send_error}")
 
 
 bot.tree.add_command(extract_command)
