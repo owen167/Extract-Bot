@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import unittest
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 
 class BotImportTests(unittest.TestCase):
@@ -31,6 +33,17 @@ class BotImportTests(unittest.TestCase):
 
         asyncio.run(bot.extract_command.callback(FakeInteraction()))
         self.assertEqual(events, ["defer", "followup"])
+
+    def test_attachment_download_retries_after_truncated_response(self) -> None:
+        import bot
+
+        attachment = SimpleNamespace(filename="chapter.zip")
+        progress_message = object()
+        with patch.object(bot, "_download_attachment", new_callable=AsyncMock) as download:
+            download.side_effect = [RuntimeError("incomplete attachment"), None]
+            with patch.object(bot.asyncio, "sleep", new_callable=AsyncMock):
+                asyncio.run(bot.save_attachment_with_retries(attachment, bot.Path("/tmp/chapter.zip"), progress_message))
+        self.assertEqual(download.await_count, 2)
 
     def test_bot_module_imports_without_login(self) -> None:
         import bot

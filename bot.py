@@ -10,6 +10,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+import aiohttp
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -88,6 +89,77 @@ def progress_embed(
     ).add_field(name="Current step", value=f"`{phase}`", inline=True)
 
 
+def download_progress_embed(filename: str, written: int, total: int, attempt: int) -> discord.Embed:
+    if total > 0:
+        percent = max(0, min(100, int(written * 100 / total)))
+        filled = int(percent / 10)
+        bar = "█" * filled + "░" * (10 - filled)
+        progress = f"`{bar}` **{percent}%**\n`{written / 1024 / 1024:.1f} / {total / 1024 / 1024:.1f} MB`"
+    else:
+        progress = f"`{written / 1024 / 1024:.1f} MB` downloaded"
+    return brand_embed(
+        "⏳ Downloading Input",
+        "The file is being downloaded from Discord before page processing starts.",
+        discord.Color.gold().value,
+    ).add_field(name="File", value=f"`{filename[:80]}`", inline=False).add_field(
+        name="Download progress", value=progress, inline=True
+    ).add_field(name="Attempt", value=f"**{attempt}**", inline=True)
+
+
+async def _download_attachment(
+    attachment: discord.Attachment,
+    destination: Path,
+    progress_message: discord.Message,
+    attempt: int,
+) -> None:
+    """Stream a Discord CDN attachment and reject truncated responses."""
+    timeout = aiohttp.ClientTimeout(total=600, connect=30, sock_read=90)
+    temporary = destination.with_suffix(destination.suffix + ".part")
+    written = 0
+    last_update = 0.0
+    try:
+        async with aiohttp.ClientSession(timeout=timeout, auto_decompress=False) as session:
+            async with session.get(attachment.url, headers={"Accept-Encoding": "identity"}) as response:
+                response.raise_for_status()
+                expected = int(response.headers.get("Content-Length", attachment.size or 0))
+                with temporary.open("wb") as output:
+                    async for chunk in response.content.iter_chunked(1024 * 1024):
+                        output.write(chunk)
+                        written += len(chunk)
+                        now = time.perf_counter()
+                        if now - last_update >= 0.75 or (expected and written >= expected):
+                            last_update = now
+                            await progress_message.edit(
+                                embed=download_progress_embed(attachment.filename, written, expected, attempt)
+                            )
+        if expected and written != expected:
+            raise RuntimeError(
+                f"Discord returned an incomplete attachment ({written} of {expected} bytes)."
+            )
+        temporary.replace(destination)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+async def save_attachment_with_retries(
+    attachment: discord.Attachment,
+    destination: Path,
+    progress_message: discord.Message,
+) -> None:
+    last_error: Exception | None = None
+    for attempt in range(1, 4):
+        try:
+            await _download_attachment(attachment, destination, progress_message, attempt)
+            return
+        except (aiohttp.ClientError, asyncio.TimeoutError, OSError, RuntimeError) as exc:
+            last_error = exc
+            print(f"Attachment download attempt {attempt}/3 failed for {attachment.filename}: {type(exc).__name__}: {exc}")
+            if attempt < 3:
+                await asyncio.sleep(2 ** (attempt - 1))
+    raise RuntimeError(f"Could not download `{attachment.filename}` after 3 attempts: {last_error}") from last_error
+
+
 async def safe_delete(message: discord.Message | None) -> None:
     if message is None:
         return
@@ -121,9 +193,17 @@ async def run_extraction(
             input_dir = Path(work_dir) / "input"
             input_dir.mkdir(parents=True, exist_ok=True)
             downloaded: list[str] = []
+            if attachments or drive_urls:
+                await progress_message.edit(
+                    embed=brand_embed(
+                        "⏳ Preparing Input",
+                        "Downloading the requested files and checking that each response is complete.",
+                        discord.Color.gold().value,
+                    ).add_field(name="Current step", value="`Downloading attachments`", inline=False)
+                )
             for attachment in attachments:
                 destination = input_dir / Path(attachment.filename).name
-                await attachment.save(destination)
+                await save_attachment_with_retries(attachment, destination, progress_message)
                 downloaded.append(str(destination))
 
             for index, drive_url in enumerate(drive_urls, start=1):
