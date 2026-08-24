@@ -54,9 +54,11 @@ class BotCoreTests(unittest.TestCase):
 
             settings = type("Settings", (), {
                 "model_path": "unused",
+                "sfx_model_path": None,
                 "ocr_languages": "eng",
                 "ocr_config": "",
                 "model_confidence": 0.35,
+                "sfx_confidence": 0.25,
                 "image_size": 1280,
                 "reading_order": "top_to_bottom",
                 "min_text_length": 1,

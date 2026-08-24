@@ -25,9 +25,11 @@ IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
 @dataclass
 class ExtractionSettings:
     model_path: str
+    sfx_model_path: str | None = None
     ocr_languages: str = "kor+eng+jpn"
     ocr_config: str = "--oem 1 --psm 6"
     model_confidence: float = 0.35
+    sfx_confidence: float = 0.25
     image_size: int = 1280
     reading_order: str = "top_to_bottom"
     min_text_length: int = 1
@@ -128,6 +130,21 @@ def expand_inputs(input_paths: Iterable[str], work_dir: str) -> list[Path]:
     return sorted(images, key=lambda path: (path.name.lower(), str(path).lower()))
 
 
+def _load_sfx_detector(settings: ExtractionSettings):
+    if not settings.sfx_model_path:
+        return None
+    model_path = Path(settings.sfx_model_path).expanduser()
+    if not model_path.is_file():
+        return None
+    from sfx_detector import SfxDetector
+
+    return SfxDetector(
+        str(model_path),
+        image_size=settings.image_size,
+        confidence=settings.sfx_confidence,
+    )
+
+
 def _ocr_crop(crop_bgr: np.ndarray, languages: str, config: str) -> str:
     """Run Tesseract through pytesseract, keeping the dependency optional at import time."""
     try:
@@ -172,7 +189,20 @@ def _kind_for_model_label(label: str, settings: ExtractionSettings) -> str:
     mapping = dict(DEFAULT_MODEL_LABEL_MAP)
     if settings.model_label_map:
         mapping.update(settings.model_label_map)
-    return mapping.get(label, "SIDE_TEXT")
+    # Unknown/ambiguous bubbles are deliberately treated as ordinary speech.
+    return mapping.get(label, "SPEECH")
+
+
+def _box_iou(first: tuple[int, int, int, int], second: tuple[int, int, int, int]) -> float:
+    ax0, ay0, ax1, ay1 = first
+    bx0, by0, bx1, by1 = second
+    ix0, iy0 = max(ax0, bx0), max(ay0, by0)
+    ix1, iy1 = min(ax1, bx1), min(ay1, by1)
+    intersection = max(0, ix1 - ix0) * max(0, iy1 - iy0)
+    first_area = max(0, ax1 - ax0) * max(0, ay1 - ay0)
+    second_area = max(0, bx1 - bx0) * max(0, by1 - by0)
+    union = first_area + second_area - intersection
+    return intersection / union if union else 0.0
 
 
 def _sort_lines(lines: list[ExtractedLine], order: str) -> list[ExtractedLine]:
@@ -185,6 +215,7 @@ def _sort_lines(lines: list[ExtractedLine], order: str) -> list[ExtractedLine]:
 def extract_chapter(image_paths: list[str], settings: ExtractionSettings, output_name: str = "chapter_extracted") -> ExtractionResult:
     started = time.perf_counter()
     segmenter = _load_segmenter(settings)
+    sfx_detector = _load_sfx_detector(settings)
     extracted: list[ExtractedLine] = []
     failed = 0
 
@@ -197,15 +228,28 @@ def extract_chapter(image_paths: list[str], settings: ExtractionSettings, output
             result = segmenter.predict(image)
             height, width = image.shape[:2]
             page_lines: list[ExtractedLine] = []
+            candidates: list[tuple[int, str, str, tuple[int, int, int, int], np.ndarray | None]] = []
             for index, instance in enumerate(result.instances):
                 # `comic` describes a panel, not a text-bearing region. OCRing it
                 # would duplicate all dialogue inside the panel.
                 if instance.label == "comic":
                     continue
                 bbox = _mask_bbox(instance.mask, width, height)
-                if bbox is None:
-                    continue
-                crop = _masked_crop(image, instance.mask, bbox)
+                if bbox is not None:
+                    candidates.append((index, instance.label, _kind_for_model_label(instance.label, settings), bbox, instance.mask))
+
+            # The Hugging Face model detects SFX boxes. They override overlapping
+            # generic text regions so sound effects are not emitted twice.
+            if sfx_detector is not None:
+                sfx_boxes = sfx_detector.predict(image)
+                for candidate in sfx_boxes:
+                    candidates = [
+                        item for item in candidates if _box_iou(item[3], candidate.bbox) < 0.35
+                    ]
+                    candidates.append((len(candidates), f"sfx:{candidate.label}", "SFX", candidate.bbox, None))
+
+            for index, model_label, kind, bbox, mask in candidates:
+                crop = _masked_crop(image, mask, bbox) if mask is not None else image[bbox[1]:bbox[3], bbox[0]:bbox[2]]
                 text = _ocr_crop(crop, settings.ocr_languages, settings.ocr_config)
                 if len(text) < settings.min_text_length:
                     continue
@@ -213,8 +257,8 @@ def extract_chapter(image_paths: list[str], settings: ExtractionSettings, output
                     ExtractedLine(
                         page=page_number,
                         region_index=index,
-                        model_label=instance.label,
-                        kind=_kind_for_model_label(instance.label, settings),
+                        model_label=model_label,
+                        kind=kind,
                         text=text,
                         bbox=bbox,
                     )
@@ -253,13 +297,16 @@ def settings_from_env() -> ExtractionSettings:
         custom_map = {str(key): str(value) for key, value in parsed.items()}
 
     model_path = os.getenv("MANGA_MODEL_PATH", "").strip()
+    sfx_model_path = os.getenv("SFX_MODEL_PATH", "./models/manga-sfx-detector.pt").strip()
     if not model_path:
-        raise ValueError("MANGA_MODEL_PATH is not configured")
+        raise ValueError("MANGA_MODEL_PATH is not configured; provide a trained Manga-Segment checkpoint")
     return ExtractionSettings(
         model_path=model_path,
+        sfx_model_path=sfx_model_path or None,
         ocr_languages=os.getenv("OCR_LANGUAGES", "kor+eng+jpn"),
         ocr_config=os.getenv("OCR_CONFIG", "--oem 1 --psm 6"),
         model_confidence=float(os.getenv("MODEL_CONFIDENCE", "0.35")),
+        sfx_confidence=float(os.getenv("SFX_CONFIDENCE", "0.25")),
         image_size=int(os.getenv("MANGA_IMAGE_SIZE", "1280")),
         reading_order=os.getenv("READING_ORDER", "top_to_bottom"),
         min_text_length=int(os.getenv("MIN_TEXT_LENGTH", "1")),

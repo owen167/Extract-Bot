@@ -50,6 +50,8 @@ Supported page formats are PNG, JPG, JPEG, WEBP, BMP, TIF, and TIFF. The bot pre
 
 The current public Manga-Segment model exposes `speech-balloon`, `thought-balloon`, `caption-box`, `text`, and `comic`. These are mapped by default in `labels.py`; `MODEL_LABEL_MAP_JSON` can override the mapping when a more specialized checkpoint is supplied.
 
+For sound effects, the bot can load [`cozy-creator/manga-sfx-detector`](https://huggingface.co/cozy-creator/manga-sfx-detector), whose `manga-sfx-detector.pt` checkpoint is downloaded into `models/` and configured with `SFX_MODEL_PATH`. Its detections are emitted with `SFX:`. When a model label is unknown or a bubble type cannot be identified, the output deliberately falls back to the ordinary speech marker `"":`.
+
 ## Installation
 
 Use Python 3.12 or newer, install Tesseract and the OCR language packs, then install Python dependencies:
@@ -63,7 +65,7 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-Set `DISCORD_TOKEN` and `MANGA_MODEL_PATH` in `.env`. The `.env` file is ignored by Git and must never be committed. The segmentation checkpoint is also ignored; store it locally or provide it through your deployment's secret/file storage.
+Set `DISCORD_TOKEN`, `MANGA_MODEL_PATH`, and (optionally) `SFX_MODEL_PATH` in `.env`. The `.env` file is ignored by Git and must never be committed. Both segmentation checkpoints are ignored; store them locally or provide them through your deployment's secret/file storage. The SFX checkpoint can be downloaded from the Hugging Face link above.
 
 Run the bot:
 
