@@ -7,12 +7,15 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
+from bubble_classifier import classify_bubble_shape
+
 
 @dataclass(frozen=True)
 class ComicDetection:
     label: str
     bbox: tuple[int, int, int, int]
     confidence: float
+    bubble_shape: str | None = None
 
 
 class ComicDetector:
@@ -113,4 +116,19 @@ class ComicDetector:
             ):
                 continue
             deduped.append(detection)
-        return sorted(deduped, key=lambda item: (item.bbox[1], item.bbox[0]))
+        annotated: list[ComicDetection] = []
+        for detection in deduped:
+            if detection.label == "bubble":
+                x0, y0, x1, y1 = detection.bbox
+                bubble_crop = image_bgr[y0:y1, x0:x1]
+                annotated.append(
+                    ComicDetection(
+                        label=detection.label,
+                        bbox=detection.bbox,
+                        confidence=detection.confidence,
+                        bubble_shape=classify_bubble_shape(bubble_crop),
+                    )
+                )
+            else:
+                annotated.append(detection)
+        return sorted(annotated, key=lambda item: (item.bbox[1], item.bbox[0]))

@@ -43,6 +43,7 @@ def stats_embed(result, chapter_name: str) -> discord.Embed:
         name="📊 Extraction Stats",
         value=(
             f"• Total images: **{result.total_images}**\n"
+            f"• Bubbles detected: **{result.total_bubbles}**\n"
             f"• Text regions: **{len(result.lines)}**\n"
             f"• Text extracted: **{sum(len(line.text) for line in result.lines)} characters**\n"
             f"• Failed images: **{result.failed_images}**"
@@ -62,7 +63,12 @@ def error_embed(message: str) -> discord.Embed:
     return brand_embed("❌ Extraction Failed", message, discord.Color.red().value)
 
 
-def progress_embed(current: int = 0, total: int = 0, phase: str = "Preparing input") -> discord.Embed:
+def progress_embed(
+    current: int = 0,
+    total: int = 0,
+    phase: str = "Preparing input",
+    bubbles: int = 0,
+) -> discord.Embed:
     if total:
         percent = max(0, min(100, int(current * 100 / total)))
         filled = int(percent / 10)
@@ -75,8 +81,8 @@ def progress_embed(current: int = 0, total: int = 0, phase: str = "Preparing inp
         "Your chapter is being downloaded, segmented, and processed with OCR. Please wait...",
         discord.Color.gold().value,
     ).add_field(name="Progress", value=progress, inline=False).add_field(
-        name="Current step", value=f"`{phase}`", inline=False
-    )
+        name="Bubbles detected", value=f"**{bubbles}**", inline=True
+    ).add_field(name="Current step", value=f"`{phase}`", inline=True)
 
 
 async def safe_delete(message: discord.Message | None) -> None:
@@ -139,19 +145,19 @@ async def run_extraction(
             total_pages = len(image_paths)
             last_update = {"page": 0, "time": 0.0}
 
-            def report_progress(page: int, total: int, _regions: int) -> None:
+            def report_progress(page: int, total: int, _regions: int, bubbles: int) -> None:
                 now = time.perf_counter()
                 if page != total and now - last_update["time"] < 0.25:
                     return
                 last_update.update(page=page, time=now)
-                embed = progress_embed(page, total, "Detecting regions and running OCR")
+                embed = progress_embed(page, total, "Detecting bubble shapes and running OCR", bubbles)
                 loop.call_soon_threadsafe(
                     asyncio.create_task,
                     progress_message.edit(embed=embed),
                 )
 
             await progress_message.edit(
-                embed=progress_embed(0, total_pages, "Detecting regions and running OCR")
+                embed=progress_embed(0, total_pages, "Detecting bubble shapes and running OCR", 0)
             )
             result = await asyncio.to_thread(
                 extract_chapter,

@@ -73,7 +73,10 @@ class BotCoreTests(unittest.TestCase):
                 "extractor._ocr_crop", side_effect=["lower text", "upper text"]
             ):
                 result = extract_chapter(
-                    [str(image_path)], settings, "chapter", lambda page, total, regions: progress.append((page, total, regions))
+                    [str(image_path)],
+                    settings,
+                    "chapter",
+                    lambda page, total, regions, bubbles: progress.append((page, total, regions, bubbles)),
                 )
 
             self.assertEqual(result.total_images, 1)
@@ -82,7 +85,7 @@ class BotCoreTests(unittest.TestCase):
             self.assertIn("(): upper text", result.output_text)
             self.assertIn('"": lower text', result.output_text)
             self.assertLess(result.output_text.index("upper text"), result.output_text.index("lower text"))
-            self.assertEqual(progress, [(1, 1, 2)])
+            self.assertEqual(progress, [(1, 1, 2, 2)])
 
     def test_zip_expansion_is_safe_and_sorted(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

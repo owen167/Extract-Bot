@@ -53,6 +53,7 @@ class ExtractionResult:
     output_text: str
     lines: list[ExtractedLine]
     total_images: int
+    total_bubbles: int
     failed_images: int
     elapsed_seconds: float
     output_name: str
@@ -263,6 +264,7 @@ def extract_chapter(
             "No comic detector is available. Set COMIC_MODEL_PATH or MANGA_MODEL_PATH."
         )
     extracted: list[ExtractedLine] = []
+    total_bubbles = 0
     failed = 0
 
     for page_number, raw_path in enumerate(image_paths, start=1):
@@ -278,13 +280,29 @@ def extract_chapter(
             if comic_detector is not None:
                 comic_detections = comic_detector.predict(image)
                 text_boxes: list[tuple[int, int, int, int]] = []
-                bubble_detections = []
+                bubble_detections = [
+                    detection for detection in comic_detections if detection.label == "bubble"
+                ]
                 for index, detection in enumerate(comic_detections):
                     if detection.label == "bubble":
-                        bubble_detections.append(detection)
                         continue
-                    kind = {"text_bubble": "SPEECH", "text_free": "SIDE_TEXT"}.get(
-                        detection.label, "SPEECH"
+                    parent_bubbles = [
+                        bubble for bubble in bubble_detections
+                        if _box_iou(bubble.bbox, detection.bbox) >= 0.10
+                        or _box_center_inside(detection.bbox, bubble.bbox)
+                    ]
+                    parent_bubble = max(
+                        parent_bubbles,
+                        key=lambda bubble: _box_iou(bubble.bbox, detection.bbox),
+                        default=None,
+                    )
+                    detected_shape = parent_bubble.bubble_shape if parent_bubble else None
+                    kind = (
+                        detected_shape
+                        if detection.label == "text_bubble" and detected_shape
+                        else {"text_bubble": "SPEECH", "text_free": "SIDE_TEXT"}.get(
+                            detection.label, "SPEECH"
+                        )
                     )
                     # text_free is often emitted on top of a text_bubble box by
                     # this checkpoint. Prefer the in-bubble text classification.
@@ -299,11 +317,15 @@ def extract_chapter(
 
                 # If a bubble was detected but its inner text box was missed, keep
                 # the bubble as ordinary dialogue instead of dropping the text.
+                total_bubbles += len(bubble_detections)
                 for index, detection in enumerate(bubble_detections, start=len(candidates)):
                     if not any(_box_iou(detection.bbox, text_box) >= 0.10 for text_box in text_boxes):
-                        candidates.append((index, detection.label, "SPEECH", detection.bbox, None))
+                        candidates.append(
+                            (index, detection.label, detection.bubble_shape or "SPEECH", detection.bbox, None)
+                        )
             else:
                 result = segmenter.predict(image)
+                total_bubbles += sum(1 for instance in result.instances if instance.label != "comic")
                 for index, instance in enumerate(result.instances):
                     # `comic` describes a panel, not a text-bearing region. OCRing it
                     # would duplicate all dialogue inside the panel.
@@ -348,11 +370,11 @@ def extract_chapter(
             sorted_lines = _sort_lines(page_lines, settings.reading_order)
             extracted.extend(sorted_lines)
             if progress_callback is not None:
-                progress_callback(page_number, len(image_paths), len(extracted))
+                progress_callback(page_number, len(image_paths), len(extracted), total_bubbles)
         except Exception:
             failed += 1
             if progress_callback is not None:
-                progress_callback(page_number, len(image_paths), len(extracted))
+                progress_callback(page_number, len(image_paths), len(extracted), total_bubbles)
 
     pages: dict[int, list[ExtractedLine]] = {}
     for line in extracted:
@@ -379,6 +401,7 @@ def extract_chapter(
         output_text="\n".join(output).rstrip() + "\n",
         lines=extracted,
         total_images=len(image_paths),
+        total_bubbles=total_bubbles,
         failed_images=failed,
         elapsed_seconds=time.perf_counter() - started,
         output_name=_safe_stem(output_name),
