@@ -24,12 +24,14 @@ IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
 
 @dataclass
 class ExtractionSettings:
-    model_path: str
+    model_path: str | None = None
+    comic_model_path: str | None = None
     sfx_model_path: str | None = None
     ocr_languages: str = "kor+eng+jpn"
     ocr_config: str = "--oem 1 --psm 6"
     model_confidence: float = 0.35
     sfx_confidence: float = 0.25
+    comic_confidence: float = 0.25
     image_size: int = 1280
     reading_order: str = "top_to_bottom"
     min_text_length: int = 1
@@ -69,11 +71,15 @@ def _load_segmenter(settings: ExtractionSettings):
     from algorithms.yolo.weights import weights_from_dir
 
     algorithms.load_all()
+    if not settings.model_path:
+        return None
     model_path = Path(settings.model_path).expanduser()
     if model_path.is_dir():
         model_path = Path(weights_from_dir(str(model_path)))
     if not model_path.is_file():
-        raise FileNotFoundError(f"MANGA_MODEL_PATH does not exist: {model_path}")
+        # The RT-DETR comic detector can run as the primary detector without a
+        # separate Manga-Segment checkpoint. Keep the optional legacy model silent.
+        return None
     return YoloSegmenter(
         str(model_path),
         imgsz=settings.image_size,
@@ -128,6 +134,21 @@ def expand_inputs(input_paths: Iterable[str], work_dir: str) -> list[Path]:
         images.extend(sorted(path for path in archive_dir.rglob("*") if _is_image(path)))
 
     return sorted(images, key=lambda path: (path.name.lower(), str(path).lower()))
+
+
+def _load_comic_detector(settings: ExtractionSettings):
+    if not settings.comic_model_path:
+        return None
+    model_path = Path(settings.comic_model_path).expanduser()
+    if not model_path.is_file():
+        return None
+    from comic_detector import ComicDetector
+
+    return ComicDetector(
+        str(model_path),
+        image_size=640,
+        confidence=settings.comic_confidence,
+    )
 
 
 def _load_sfx_detector(settings: ExtractionSettings):
@@ -214,8 +235,13 @@ def _sort_lines(lines: list[ExtractedLine], order: str) -> list[ExtractedLine]:
 
 def extract_chapter(image_paths: list[str], settings: ExtractionSettings, output_name: str = "chapter_extracted") -> ExtractionResult:
     started = time.perf_counter()
+    comic_detector = _load_comic_detector(settings)
     segmenter = _load_segmenter(settings)
     sfx_detector = _load_sfx_detector(settings)
+    if comic_detector is None and segmenter is None:
+        raise FileNotFoundError(
+            "No comic detector is available. Set COMIC_MODEL_PATH or MANGA_MODEL_PATH."
+        )
     extracted: list[ExtractedLine] = []
     failed = 0
 
@@ -225,20 +251,41 @@ def extract_chapter(image_paths: list[str], settings: ExtractionSettings, output
             failed += 1
             continue
         try:
-            result = segmenter.predict(image)
             height, width = image.shape[:2]
             page_lines: list[ExtractedLine] = []
             candidates: list[tuple[int, str, str, tuple[int, int, int, int], np.ndarray | None]] = []
-            for index, instance in enumerate(result.instances):
-                # `comic` describes a panel, not a text-bearing region. OCRing it
-                # would duplicate all dialogue inside the panel.
-                if instance.label == "comic":
-                    continue
-                bbox = _mask_bbox(instance.mask, width, height)
-                if bbox is not None:
-                    candidates.append((index, instance.label, _kind_for_model_label(instance.label, settings), bbox, instance.mask))
 
-            # The Hugging Face model detects SFX boxes. They override overlapping
+            if comic_detector is not None:
+                comic_detections = comic_detector.predict(image)
+                text_boxes: list[tuple[int, int, int, int]] = []
+                bubble_detections = []
+                for index, detection in enumerate(comic_detections):
+                    if detection.label == "bubble":
+                        bubble_detections.append(detection)
+                        continue
+                    kind = {"text_bubble": "SPEECH", "text_free": "SIDE_TEXT"}.get(
+                        detection.label, "SPEECH"
+                    )
+                    text_boxes.append(detection.bbox)
+                    candidates.append((index, detection.label, kind, detection.bbox, None))
+
+                # If a bubble was detected but its inner text box was missed, keep
+                # the bubble as ordinary dialogue instead of dropping the text.
+                for index, detection in enumerate(bubble_detections, start=len(candidates)):
+                    if not any(_box_iou(detection.bbox, text_box) >= 0.10 for text_box in text_boxes):
+                        candidates.append((index, detection.label, "SPEECH", detection.bbox, None))
+            else:
+                result = segmenter.predict(image)
+                for index, instance in enumerate(result.instances):
+                    # `comic` describes a panel, not a text-bearing region. OCRing it
+                    # would duplicate all dialogue inside the panel.
+                    if instance.label == "comic":
+                        continue
+                    bbox = _mask_bbox(instance.mask, width, height)
+                    if bbox is not None:
+                        candidates.append((index, instance.label, _kind_for_model_label(instance.label, settings), bbox, instance.mask))
+
+            # The SFX model detects sound-effect boxes. They override overlapping
             # generic text regions so sound effects are not emitted twice.
             if sfx_detector is not None:
                 sfx_boxes = sfx_detector.predict(image)
@@ -296,17 +343,22 @@ def settings_from_env() -> ExtractionSettings:
             raise ValueError("MODEL_LABEL_MAP_JSON must be a JSON object")
         custom_map = {str(key): str(value) for key, value in parsed.items()}
 
-    model_path = os.getenv("MANGA_MODEL_PATH", "").strip()
-    sfx_model_path = os.getenv("SFX_MODEL_PATH", "./models/manga-sfx-detector.pt").strip()
-    if not model_path:
-        raise ValueError("MANGA_MODEL_PATH is not configured; provide a trained Manga-Segment checkpoint")
+    model_path = os.getenv("MANGA_MODEL_PATH", "").strip() or None
+    comic_model_path = os.getenv(
+        "COMIC_MODEL_PATH", "./models/comic-text-detector/detector-v4-s_int8.onnx"
+    ).strip() or None
+    sfx_model_path = os.getenv("SFX_MODEL_PATH", "./models/manga-sfx-detector.pt").strip() or None
+    if not model_path and not comic_model_path:
+        raise ValueError("Set COMIC_MODEL_PATH or MANGA_MODEL_PATH")
     return ExtractionSettings(
         model_path=model_path,
-        sfx_model_path=sfx_model_path or None,
+        comic_model_path=comic_model_path,
+        sfx_model_path=sfx_model_path,
         ocr_languages=os.getenv("OCR_LANGUAGES", "kor+eng+jpn"),
         ocr_config=os.getenv("OCR_CONFIG", "--oem 1 --psm 6"),
         model_confidence=float(os.getenv("MODEL_CONFIDENCE", "0.35")),
         sfx_confidence=float(os.getenv("SFX_CONFIDENCE", "0.25")),
+        comic_confidence=float(os.getenv("COMIC_CONFIDENCE", "0.25")),
         image_size=int(os.getenv("MANGA_IMAGE_SIZE", "1280")),
         reading_order=os.getenv("READING_ORDER", "top_to_bottom"),
         min_text_length=int(os.getenv("MIN_TEXT_LENGTH", "1")),
