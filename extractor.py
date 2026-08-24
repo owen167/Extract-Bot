@@ -20,6 +20,7 @@ import numpy as np
 from labels import DEFAULT_MODEL_LABEL_MAP, format_line
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
+AUTO_OCR_LANGUAGES = "ara+chi_sim+chi_tra+deu+ell+eng+fra+heb+hin+ind+ita+jpn+kor+nld+pol+por+rus+spa+srp+tha+tur+ukr+urd+vie"
 
 
 @dataclass
@@ -225,6 +226,8 @@ def _ocr_crop(crop_bgr: np.ndarray, languages: str, config: str, min_confidence:
                 best_confidence = mean_confidence
         return best_text, best_confidence
 
+    if languages.strip().lower() == "auto":
+        languages = AUTO_OCR_LANGUAGES
     language_list = [part.strip() for part in languages.split("+") if part.strip()]
     combined_text, combined_confidence = run_language(languages)
     if len(language_list) <= 1 or not combined_text:
@@ -234,14 +237,24 @@ def _ocr_crop(crop_bgr: np.ndarray, languages: str, config: str, min_confidence:
     counts = {
         "kor": sum("\uac00" <= char <= "\ud7a3" for char in chars),
         "jpn": sum("\u3040" <= char <= "\u30ff" for char in chars),
+        "ara": sum("\u0600" <= char <= "\u06ff" for char in chars),
+        "rus": sum("\u0400" <= char <= "\u04ff" for char in chars),
+        "ell": sum("\u0370" <= char <= "\u03ff" for char in chars),
+        "hin": sum("\u0900" <= char <= "\u097f" for char in chars),
+        "tha": sum("\u0e00" <= char <= "\u0e7f" for char in chars),
+        "heb": sum("\u0590" <= char <= "\u05ff" for char in chars),
+        "chi_sim": sum("\u4e00" <= char <= "\u9fff" for char in chars),
         "eng": sum(("A" <= char <= "Z") or ("a" <= char <= "z") for char in chars),
     }
     total_script_chars = sum(counts.values())
     preferred = None
     if total_script_chars:
         dominant_language, dominant_count = max(counts.items(), key=lambda item: item[1])
-        if dominant_count / total_script_chars >= 0.75 and dominant_language in language_list:
-            preferred = dominant_language
+        if dominant_count / total_script_chars >= 0.75:
+            if dominant_language == "chi_sim" and "chi_sim" in language_list:
+                preferred = "chi_sim"
+            elif dominant_language in language_list:
+                preferred = dominant_language
     if preferred is None:
         return combined_text
 
@@ -258,7 +271,7 @@ def _is_plausible_text(text: str, crop_bgr: np.ndarray, kind: str) -> bool:
     cleaned = re.sub(r"\s+", "", text)
     if not cleaned or len(cleaned) > 500:
         return False
-    if len(cleaned) <= 1 and not any("\uac00" <= char <= "\ud7a3" for char in cleaned):
+    if len(cleaned) <= 1 and not any(char.isalnum() for char in cleaned):
         return False
     if kind == "SFX" and len(cleaned) < 2:
         return False
@@ -277,14 +290,9 @@ def _is_plausible_text(text: str, crop_bgr: np.ndarray, kind: str) -> bool:
         return False
     if kind == "SFX" and not any(char.isalpha() for char in cleaned):
         return False
-    script_families = sum([
-        any(("\uac00" <= char <= "\ud7a3") for char in cleaned),
-        any(("\u3040" <= char <= "\u30ff") for char in cleaned),
-        any(("A" <= char <= "Z") or ("a" <= char <= "z") for char in cleaned),
-    ])
-    if len(cleaned) > 12 and script_families >= 3:
+    if kind in {"NARRATION", "SIDE_TEXT", "SFX"} and not any(char.isalpha() for char in cleaned):
         return False
-    if kind == "SFX" and len(cleaned) > 40:
+    if kind == "SFX" and len(cleaned) > 30:
         return False
     if kind == "SFX" and len(cleaned) > 15 and symbols / max(1, len(cleaned)) > 0.20:
         return False
@@ -400,6 +408,7 @@ def extract_chapter(
             height, width = image.shape[:2]
             page_lines: list[ExtractedLine] = []
             candidates: list[tuple[int, str, str, tuple[int, int, int, int], np.ndarray | None]] = []
+            sfx_boxes = sfx_detector.predict(image) if sfx_detector is not None else []
 
             if comic_detector is not None:
                 comic_detections = comic_detector.predict(image)
@@ -428,12 +437,21 @@ def extract_chapter(
                             detection.label, "SPEECH"
                         )
                     )
+                    if detection.label == "text_free" and parent_bubble is None:
+                        kind = "NARRATION"
                     # text_free is often emitted on top of a text_bubble box by
                     # this checkpoint. Prefer the in-bubble text classification.
-                    if detection.label == "text_free" and any(
-                        item[1] == "text_bubble"
-                        and (_box_iou(item[3], detection.bbox) >= 0.05 or _box_center_inside(detection.bbox, item[3]))
-                        for item in candidates
+                    if detection.label == "text_free" and (
+                        any(
+                            item[1] == "text_bubble"
+                            and (_box_iou(item[3], detection.bbox) >= 0.05 or _box_center_inside(detection.bbox, item[3]))
+                            for item in candidates
+                        )
+                        or any(
+                            candidate.confidence >= max(settings.sfx_confidence, 0.70)
+                            and (_box_iou(candidate.bbox, detection.bbox) >= 0.10 or _box_center_inside(candidate.bbox, detection.bbox))
+                            for candidate in sfx_boxes
+                        )
                     ):
                         continue
                     text_boxes.append(detection.bbox)
@@ -464,7 +482,6 @@ def extract_chapter(
             # The SFX model detects sound-effect boxes. They override overlapping
             # generic text regions so sound effects are not emitted twice.
             if sfx_detector is not None:
-                sfx_boxes = sfx_detector.predict(image)
                 for candidate in sfx_boxes:
                     # The SFX checkpoint is intentionally conservative. Its old
                     # low threshold caused ordinary dialogue to be relabeled SFX.
@@ -580,7 +597,7 @@ def settings_from_env() -> ExtractionSettings:
         model_path=model_path,
         comic_model_path=comic_model_path,
         sfx_model_path=sfx_model_path,
-        ocr_languages=os.getenv("OCR_LANGUAGES", "eng+kor+jpn"),
+        ocr_languages=os.getenv("OCR_LANGUAGES", "auto"),
         ocr_config=os.getenv("OCR_CONFIG", "--oem 1 --psm 6"),
         model_confidence=float(os.getenv("MODEL_CONFIDENCE", "0.35")),
         sfx_confidence=float(os.getenv("SFX_CONFIDENCE", "0.70")),

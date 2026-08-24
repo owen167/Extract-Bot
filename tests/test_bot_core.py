@@ -92,6 +92,9 @@ class BotCoreTests(unittest.TestCase):
         self.assertFalse(_is_plausible_text("0 / 404 < 고 2", crop, "SPEECH"))
         self.assertFalse(_is_plausible_text("6", crop, "SFX"))
         self.assertTrue(_is_plausible_text("안녕 English 日本語!?", crop, "SPEECH"))
+        self.assertTrue(_is_plausible_text("هذا نص عربي", crop, "NARRATION"))
+        self.assertTrue(_is_plausible_text("这是中文 текст", crop, "NARRATION"))
+        self.assertFalse(_is_plausible_text("... --- !!!", crop, "NARRATION"))
         self.assertEqual(ExtractionSettings().ocr_languages, "eng+kor+jpn")
 
     def test_text_bubble_inherits_containing_bubble_shape(self) -> None:
@@ -119,6 +122,24 @@ class BotCoreTests(unittest.TestCase):
                 result = extract_chapter([str(image_path)], settings, "chapter")
             self.assertEqual(len(result.lines), 1)
             self.assertEqual(result.lines[0].kind, "THOUGHT")
+
+    def test_free_text_outside_bubble_is_narration(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            image_path = Path(temp) / "001.png"
+            cv2.imwrite(str(image_path), np.zeros((120, 160, 3), dtype=np.uint8))
+
+            class FakeComicDetector:
+                def predict(self, _image):
+                    from comic_detector import ComicDetection
+                    return [ComicDetection("text_free", (10, 10, 100, 50), 0.95, None)]
+
+            settings = ExtractionSettings(comic_model_path="unused", ocr_languages="kor", min_text_length=1)
+            with patch("extractor._load_comic_detector", return_value=FakeComicDetector()), patch(
+                "extractor._load_segmenter", return_value=None
+            ), patch("extractor._ocr_crop", return_value="장면 설명"):
+                result = extract_chapter([str(image_path)], settings, "chapter")
+            self.assertEqual(result.lines[0].kind, "NARRATION")
+            self.assertIn("OT: 장면 설명", result.output_text)
 
     def test_sfx_does_not_replace_overlapping_bubble_text(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
