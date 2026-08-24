@@ -1,0 +1,13 @@
+.env
+*.pyc
+__pycache__/
+.venv/
+venv/
+models/
+runs/
+output/
+work/
+*.pt
+*.onnx
+*.engine
+*.log

@@ -1,0 +1,10 @@
+discord.py>=2.5.0,<3.0.0
+python-dotenv>=1.0.0
+numpy>=2.0.0
+opencv-python-headless>=4.10.0
+pytesseract>=0.3.13
+ultralytics>=8.3.0
+# Install a CPU or CUDA-compatible PyTorch build for your machine.
+torch>=2.0.0
+torchvision>=0.15.0
+gdown>=5.2.0
