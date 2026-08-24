@@ -169,6 +169,13 @@ async def safe_delete(message: discord.Message | None) -> None:
         pass
 
 
+async def delete_source_message(interaction: discord.Interaction) -> None:
+    """Delete a source message only when Discord exposes one for the interaction."""
+    source_message = getattr(interaction, "message", None)
+    if source_message is not None:
+        await safe_delete(source_message)
+
+
 async def send_error(interaction: discord.Interaction, message: str) -> None:
     embed = error_embed(message)
     if interaction.response.is_done():
@@ -259,6 +266,10 @@ async def run_extraction(
             file=discord.File(output_path, filename=f"{result.output_name}.txt"),
             allowed_mentions=discord.AllowedMentions(users=True),
         )
+        # Slash commands normally have no user message object. If Discord does
+        # expose a source message (for another interaction type), remove it
+        # only after the result upload has succeeded; never delete the result.
+        await delete_source_message(interaction)
     except Exception as exc:
         elapsed = time.perf_counter() - started
         print(f"Extraction error after {elapsed:.2f}s: {type(exc).__name__}: {exc}")
