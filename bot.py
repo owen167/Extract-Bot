@@ -257,8 +257,11 @@ async def extract_command(
         )
         return
 
-    await interaction.response.send_message(embed=progress_embed())
-    progress_message = await interaction.original_response()
+    await interaction.response.defer()
+    progress_message = await interaction.followup.send(
+        embed=progress_embed(),
+        wait=True,
+    )
     await run_extraction(
         interaction,
         attachments,
