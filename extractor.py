@@ -27,7 +27,7 @@ class ExtractionSettings:
     model_path: str | None = None
     comic_model_path: str | None = None
     sfx_model_path: str | None = None
-    ocr_languages: str = "kor"
+    ocr_languages: str = "eng+kor+jpn"
     ocr_config: str = "--oem 1 --psm 6"
     model_confidence: float = 0.35
     sfx_confidence: float = 0.25
@@ -36,6 +36,7 @@ class ExtractionSettings:
     reading_order: str = "top_to_bottom"
     min_text_length: int = 1
     ocr_min_confidence: float = 15.0
+    bubble_fallback_confidence: float = 0.85
     model_label_map: dict[str, str] | None = None
 
 
@@ -173,51 +174,83 @@ def _load_sfx_detector(settings: ExtractionSettings):
 
 
 def _ocr_crop(crop_bgr: np.ndarray, languages: str, config: str, min_confidence: float = 15.0) -> str:
-    """Run Korean-first Tesseract and select the stronger layout mode by token confidence."""
+    """Run multilingual OCR while avoiding cross-language hallucinations."""
     try:
         import pytesseract
     except ImportError as exc:
         raise RuntimeError("pytesseract is not installed; install requirements.txt") from exc
 
     crop_rgb = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB)
-    # Upscaling helps small Korean/Japanese glyphs in webtoon screenshots.
     height, width = crop_rgb.shape[:2]
     scale = 2 if max(height, width) < 1200 else 1
     if scale > 1:
         crop_rgb = cv2.resize(crop_rgb, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+
     configs = [config]
     if "--psm 6" in config:
         configs.append(config.replace("--psm 6", "--psm 11"))
     elif "--psm 11" in config:
         configs.append(config.replace("--psm 11", "--psm 6"))
-    best_text = ""
-    best_confidence = -1.0
-    for candidate_config in dict.fromkeys(configs):
-        data = pytesseract.image_to_data(
-            crop_rgb,
-            lang=languages,
-            config=candidate_config,
-            output_type=pytesseract.Output.DICT,
-        )
-        confidences: list[float] = []
-        for raw_text, raw_conf in zip(data.get("text", []), data.get("conf", [])):
-            if not str(raw_text).strip():
+
+    def run_language(language: str) -> tuple[str, float]:
+        best_text = ""
+        best_confidence = -1.0
+        for candidate_config in dict.fromkeys(configs):
+            data = pytesseract.image_to_data(
+                crop_rgb,
+                lang=language,
+                config=candidate_config,
+                output_type=pytesseract.Output.DICT,
+            )
+            confidences: list[float] = []
+            for raw_text, raw_conf in zip(data.get("text", []), data.get("conf", [])):
+                if not str(raw_text).strip():
+                    continue
+                try:
+                    confidence = float(raw_conf)
+                except (TypeError, ValueError):
+                    continue
+                if confidence >= min_confidence:
+                    confidences.append(confidence)
+            mean_confidence = sum(confidences) / len(confidences) if confidences else -1.0
+            if mean_confidence < best_confidence:
                 continue
-            try:
-                confidence = float(raw_conf)
-            except (TypeError, ValueError):
-                continue
-            if confidence >= min_confidence:
-                confidences.append(confidence)
-        mean_confidence = sum(confidences) / len(confidences) if confidences else -1.0
-        if mean_confidence < best_confidence:
-            continue
-        text = pytesseract.image_to_string(crop_rgb, lang=languages, config=candidate_config)
-        text = " ".join(line.strip() for line in text.splitlines() if line.strip()).strip()
-        if text:
-            best_text = text
-            best_confidence = mean_confidence
-    return best_text
+            text = pytesseract.image_to_string(crop_rgb, lang=language, config=candidate_config)
+            text = " ".join(line.strip() for line in text.splitlines() if line.strip()).strip()
+            # Backslash is never a manga glyph and is a common Tesseract artifact.
+            text = re.sub(r"\\", "", text).strip()
+
+            if text:
+                best_text = text
+                best_confidence = mean_confidence
+        return best_text, best_confidence
+
+    language_list = [part.strip() for part in languages.split("+") if part.strip()]
+    combined_text, combined_confidence = run_language(languages)
+    if len(language_list) <= 1 or not combined_text:
+        return combined_text
+
+    chars = [char for char in combined_text if char.isalnum()]
+    counts = {
+        "kor": sum("\uac00" <= char <= "\ud7a3" for char in chars),
+        "jpn": sum("\u3040" <= char <= "\u30ff" for char in chars),
+        "eng": sum(("A" <= char <= "Z") or ("a" <= char <= "z") for char in chars),
+    }
+    total_script_chars = sum(counts.values())
+    preferred = None
+    if total_script_chars:
+        dominant_language, dominant_count = max(counts.items(), key=lambda item: item[1])
+        if dominant_count / total_script_chars >= 0.75 and dominant_language in language_list:
+            preferred = dominant_language
+    if preferred is None:
+        return combined_text
+
+    preferred_text, preferred_confidence = run_language(preferred)
+    # Prefer the single-script transcription when it is usable. This keeps
+    # Korean text Korean instead of appending accidental Japanese/Latin glyphs.
+    if preferred_text and preferred_confidence >= max(min_confidence, combined_confidence - 15.0):
+        return preferred_text
+    return combined_text
 
 
 def _is_plausible_text(text: str, crop_bgr: np.ndarray, kind: str) -> bool:
@@ -229,14 +262,31 @@ def _is_plausible_text(text: str, crop_bgr: np.ndarray, kind: str) -> bool:
         return False
     if kind == "SFX" and len(cleaned) < 2:
         return False
-    if not any(char.isalpha() or "\uac00" <= char <= "\ud7a3" for char in cleaned):
+    # Reject only a completely non-text result. Once a crop contains a
+    # letter/number/script character, preserve the full OCR string—including
+    # punctuation, mixed scripts, and spacing—without token-level deletion.
+    meaningful = sum(char.isalnum() for char in cleaned)
+    letters = sum(char.isalpha() for char in cleaned)
+    digits = sum(char.isdigit() for char in cleaned)
+    symbols = sum(not char.isalnum() for char in cleaned)
+    if meaningful == 0:
         return False
-    digits = sum(char.isdigit() for char in cleaned) / max(1, len(cleaned))
-    symbols = sum(not char.isalnum() for char in cleaned) / max(1, len(cleaned))
-    if digits > 0.15 and symbols > 0.15:
+    # A single accidental glyph surrounded by OCR-number/symbol noise is not
+    # a multilingual transcription. Do not apply a language-specific filter.
+    if letters <= 1 and digits >= 2 and symbols >= 2:
         return False
-    meaningful = sum(char.isalpha() or char.isdigit() or "\uac00" <= char <= "\ud7a3" for char in cleaned)
-    if meaningful / max(1, len(cleaned)) < 0.45:
+    if kind == "SFX" and not any(char.isalpha() for char in cleaned):
+        return False
+    script_families = sum([
+        any(("\uac00" <= char <= "\ud7a3") for char in cleaned),
+        any(("\u3040" <= char <= "\u30ff") for char in cleaned),
+        any(("A" <= char <= "Z") or ("a" <= char <= "z") for char in cleaned),
+    ])
+    if len(cleaned) > 12 and script_families >= 3:
+        return False
+    if kind == "SFX" and len(cleaned) > 40:
+        return False
+    if kind == "SFX" and len(cleaned) > 15 and symbols / max(1, len(cleaned)) > 0.20:
         return False
     gray = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
     ink_ratio = float(np.mean(gray < 180))
@@ -393,6 +443,8 @@ def extract_chapter(
                 # the bubble as ordinary dialogue instead of dropping the text.
                 total_bubbles += len(bubble_detections)
                 for index, detection in enumerate(bubble_detections, start=len(candidates)):
+                    if detection.confidence < getattr(settings, "bubble_fallback_confidence", 0.85):
+                        continue
                     if not any(_box_iou(detection.bbox, text_box) >= 0.10 for text_box in text_boxes):
                         candidates.append(
                             (index, detection.label, detection.bubble_shape or "SPEECH", detection.bbox, None)
@@ -528,7 +580,7 @@ def settings_from_env() -> ExtractionSettings:
         model_path=model_path,
         comic_model_path=comic_model_path,
         sfx_model_path=sfx_model_path,
-        ocr_languages=os.getenv("OCR_LANGUAGES", "kor"),
+        ocr_languages=os.getenv("OCR_LANGUAGES", "eng+kor+jpn"),
         ocr_config=os.getenv("OCR_CONFIG", "--oem 1 --psm 6"),
         model_confidence=float(os.getenv("MODEL_CONFIDENCE", "0.35")),
         sfx_confidence=float(os.getenv("SFX_CONFIDENCE", "0.70")),
@@ -537,5 +589,6 @@ def settings_from_env() -> ExtractionSettings:
         reading_order=os.getenv("READING_ORDER", "top_to_bottom"),
         min_text_length=int(os.getenv("MIN_TEXT_LENGTH", "1")),
         ocr_min_confidence=float(os.getenv("OCR_MIN_CONFIDENCE", "15")),
+        bubble_fallback_confidence=float(os.getenv("BUBBLE_FALLBACK_CONFIDENCE", "0.85")),
         model_label_map=custom_map,
     )

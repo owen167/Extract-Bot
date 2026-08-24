@@ -91,7 +91,8 @@ class BotCoreTests(unittest.TestCase):
         crop = np.zeros((80, 120, 3), dtype=np.uint8)
         self.assertFalse(_is_plausible_text("0 / 404 < 고 2", crop, "SPEECH"))
         self.assertFalse(_is_plausible_text("6", crop, "SFX"))
-        self.assertTrue(_is_plausible_text("안녕", crop, "SPEECH"))
+        self.assertTrue(_is_plausible_text("안녕 English 日本語!?", crop, "SPEECH"))
+        self.assertEqual(ExtractionSettings().ocr_languages, "eng+kor+jpn")
 
     def test_text_bubble_inherits_containing_bubble_shape(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
