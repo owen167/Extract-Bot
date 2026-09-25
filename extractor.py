@@ -29,6 +29,7 @@ SHAPE_PRIORITY = {
     "CAPTION": 2,
     "SPEECH": 1,
 }
+CREDIT_OVERLAY_TERMS = ("you can read the chapter", "thunderscans.com", "read the chapter on")
 OCR_HIDDEN_DIRECTIONAL_CHARS = dict.fromkeys(
     ord(char) for char in "\u200b\u200c\u200d\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2069\ufeff"
 )
@@ -208,51 +209,73 @@ def _ocr_crop(crop_bgr: np.ndarray, languages: str, config: str, min_confidence:
     if dot_text:
         return dot_text
 
+    image_variants = [crop_rgb]
+    if height > width * 1.5:
+        image_variants.extend(
+            [
+                cv2.rotate(crop_rgb, cv2.ROTATE_90_CLOCKWISE),
+                cv2.rotate(crop_rgb, cv2.ROTATE_90_COUNTERCLOCKWISE),
+            ]
+        )
+    gray = cv2.cvtColor(crop_rgb, cv2.COLOR_RGB2GRAY)
+    if languages.strip().lower() == "eng" or "eng" in languages.strip().lower().split("+"):
+        image_variants.append(
+            cv2.adaptiveThreshold(
+                gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 11
+            )
+        )
+
     configs = [config]
     if "--psm 6" in config:
         configs.append(config.replace("--psm 6", "--psm 11"))
+        if height > width * 1.35:
+            configs.append(config.replace("--psm 6", "--psm 5"))
     elif "--psm 11" in config:
         configs.append(config.replace("--psm 11", "--psm 6"))
 
     def run_language(language: str) -> tuple[str, float]:
         best_text = ""
         best_confidence = -1.0
-        for candidate_config in dict.fromkeys(configs):
-            data = pytesseract.image_to_data(
-                crop_rgb,
-                lang=language,
-                config=candidate_config,
-                output_type=pytesseract.Output.DICT,
-            )
-            confidences: list[float] = []
-            for raw_text, raw_conf in zip(data.get("text", []), data.get("conf", [])):
-                if not str(raw_text).strip():
+        ocr_language = "jpn_vert" if language == "jpn" and height > width * 1.35 else language
+        for image in image_variants:
+            for candidate_config in dict.fromkeys(configs):
+                data = pytesseract.image_to_data(
+                    image,
+                    lang=ocr_language,
+                    config=candidate_config,
+                    output_type=pytesseract.Output.DICT,
+                )
+                confidences: list[float] = []
+                for raw_text, raw_conf in zip(data.get("text", []), data.get("conf", [])):
+                    if not str(raw_text).strip():
+                        continue
+                    try:
+                        confidence = float(raw_conf)
+                    except (TypeError, ValueError):
+                        continue
+                    if confidence >= min_confidence:
+                        confidences.append(confidence)
+                mean_confidence = sum(confidences) / len(confidences) if confidences else -1.0
+                if mean_confidence < best_confidence:
                     continue
-                try:
-                    confidence = float(raw_conf)
-                except (TypeError, ValueError):
-                    continue
-                if confidence >= min_confidence:
-                    confidences.append(confidence)
-            mean_confidence = sum(confidences) / len(confidences) if confidences else -1.0
-            if mean_confidence < best_confidence:
-                continue
-            text = pytesseract.image_to_string(crop_rgb, lang=language, config=candidate_config)
-            text = " ".join(line.strip() for line in text.splitlines() if line.strip()).strip()
-            # Remove invisible bidi/zero-width controls that make Arabic appear
-            # split or surrounded by unexplained marks in Discord/TXT output.
-            text = text.translate(OCR_HIDDEN_DIRECTIONAL_CHARS)
-            # Backslash is never a manga glyph and is a common Tesseract artifact.
-            text = re.sub(r"\\", "", text).strip()
-            # OCR often inserts a space between adjacent marks such as `? !`;
-            # remove only those punctuation-adjacent spaces, not word spacing.
-            punctuation = r"[,.;:!?？！。，、；：…]"
-            text = re.sub(rf"({punctuation})\s+(?={punctuation})", r"\1", text)
-            text = re.sub(rf"(?<={punctuation})\s+({punctuation})", r"\1", text)
+                text = pytesseract.image_to_string(image, lang=ocr_language, config=candidate_config)
+                text = " ".join(line.strip() for line in text.splitlines() if line.strip()).strip()
+                # Remove invisible bidi/zero-width controls that make Arabic appear
+                # split or surrounded by unexplained marks in Discord/TXT output.
+                text = text.translate(OCR_HIDDEN_DIRECTIONAL_CHARS)
+                # Backslash is never a manga glyph and is a common Tesseract artifact.
+                text = re.sub(r"\\", "", text).strip()
+                # OCR often inserts a space between adjacent marks such as `? !`;
+                # remove only those punctuation-adjacent spaces, not word spacing.
+                punctuation = r"[,.;:!?？！。，、；：…]"
+                text = re.sub(rf"({punctuation})\s+(?={punctuation})", r"\1", text)
+                text = re.sub(rf"(?<={punctuation})\s+({punctuation})", r"\1", text)
+                japanese_char = r"[\u3040-\u30ff\u4e00-\u9fff]"
+                text = re.sub(rf"(?<={japanese_char})\s+(?={japanese_char})", "", text)
 
-            if text:
-                best_text = text
-                best_confidence = mean_confidence
+                if text:
+                    best_text = text
+                    best_confidence = mean_confidence
         return best_text, best_confidence
 
     auto_languages = languages.strip().lower() == "auto"
@@ -269,10 +292,33 @@ def _ocr_crop(crop_bgr: np.ndarray, languages: str, config: str, min_confidence:
         # small set of script-specific passes and retain the highest-confidence
         # transcription instead of trusting the mixed-language hallucination.
         best_text, best_confidence = combined_text, combined_confidence
+        latin = sum(("A" <= char <= "Z") or ("a" <= char <= "z") for char in combined_text)
+        cjk = sum("\u4e00" <= char <= "\u9fff" for char in combined_text)
+        if latin >= 3 and latin >= cjk:
+            english_text, english_confidence = run_language("eng")
+            if english_text:
+                best_text, best_confidence = english_text, english_confidence
+        candidates: dict[str, tuple[str, float]] = {}
         for language in ("chi_sim", "jpn", "kor", "ara", "rus", "eng"):
             candidate_text, candidate_confidence = run_language(language)
+            candidates[language] = (candidate_text, candidate_confidence)
             if candidate_text and candidate_confidence > best_confidence:
                 best_text, best_confidence = candidate_text, candidate_confidence
+
+        # Mixed-language OCR often turns vertical Japanese into Latin noise.
+        # Prefer the Japanese pass when it contains clear kana/kanji evidence
+        # and the mixed result does not contain comparable Japanese script.
+        japanese_text, japanese_confidence = candidates.get("jpn", ("", -1.0))
+        japanese_chars = sum(
+            ("\u3040" <= char <= "\u30ff") or ("\u4e00" <= char <= "\u9fff")
+            for char in japanese_text
+        )
+        mixed_japanese_chars = sum(
+            ("\u3040" <= char <= "\u30ff") or ("\u4e00" <= char <= "\u9fff")
+            for char in combined_text
+        )
+        if japanese_chars >= 2 and japanese_chars > mixed_japanese_chars:
+            best_text, best_confidence = japanese_text, japanese_confidence
         return best_text
 
     chars = [char for char in combined_text if char.isalnum()]
@@ -371,6 +417,8 @@ def _is_plausible_text(text: str, crop_bgr: np.ndarray, kind: str) -> bool:
         return False
     if len(cleaned) >= 8 and letters <= 1 and digits + symbols > 4:
         return False
+    if kind in {"NARRATION", "SIDE_TEXT"} and len(cleaned) >= 8 and symbols > letters * 2:
+        return False
     if kind == "SFX" and not any(char.isalpha() for char in cleaned):
         return False
     if kind in {"NARRATION", "SIDE_TEXT", "SFX"} and not any(char.isalpha() for char in cleaned):
@@ -385,6 +433,11 @@ def _is_plausible_text(text: str, crop_bgr: np.ndarray, kind: str) -> bool:
     # decorative texture. Keep speech crops less strict than side/SFX crops.
     minimum_ink = 0.004 if kind in {"SPEECH", "THOUGHT", "SHOUT", "SQUARE", "CAPTION"} else 0.010
     return ink_ratio >= minimum_ink
+
+
+def _is_credit_overlay(text: str) -> bool:
+    normalized = re.sub(r"\s+", " ", text).strip().lower()
+    return any(term in normalized for term in CREDIT_OVERLAY_TERMS)
 
 
 def _mask_bbox(mask: np.ndarray, width: int, height: int) -> tuple[int, int, int, int] | None:
@@ -502,6 +555,12 @@ def extract_chapter(
                 for index, detection in enumerate(comic_detections):
                     if detection.label == "bubble":
                         continue
+                    # Low-confidence free-text boxes are commonly panel art,
+                    # watermarks, or speed-line texture rather than dialogue.
+                    # Keep title/caption candidates only when the detector is
+                    # reasonably certain; bubble text uses the stronger class.
+                    if detection.label == "text_free" and detection.confidence < 0.50:
+                        continue
                     parent_bubbles = [
                         bubble for bubble in bubble_detections
                         if _box_iou(bubble.bbox, detection.bbox) >= 0.10
@@ -592,6 +651,9 @@ def extract_chapter(
                 if kind == "SFX":
                     ocr_config = os.getenv("SFX_OCR_CONFIG", "--oem 1 --psm 11")
                 text = _ocr_crop(crop, settings.ocr_languages, ocr_config, getattr(settings, "ocr_min_confidence", 15.0))
+                if _is_credit_overlay(text):
+                    rejected_low_quality += 1
+                    continue
                 if len(text) < settings.min_text_length or not _is_plausible_text(text, crop, kind):
                     rejected_low_quality += 1
                     continue

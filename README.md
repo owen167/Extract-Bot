@@ -50,7 +50,7 @@ Use Python 3.12 or newer, install Tesseract and the OCR language packs, then ins
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y tesseract-ocr tesseract-ocr-eng tesseract-ocr-kor tesseract-ocr-jpn
+sudo apt-get install -y tesseract-ocr tesseract-ocr-eng tesseract-ocr-kor tesseract-ocr-jpn tesseract-ocr-jpn-vert
 python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
