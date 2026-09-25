@@ -20,6 +20,7 @@ import numpy as np
 from labels import DEFAULT_MODEL_LABEL_MAP, format_line
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
+PUNCTUATION_ONLY_RE = re.compile(r"^[\s.…·•*_'\-–—~!?؟،,.:;]+$")
 AUTO_OCR_LANGUAGES = "ara+chi_sim+chi_tra+deu+ell+eng+fra+heb+hin+ind+ita+jpn+kor+nld+pol+por+rus+spa+srp+tha+tur+ukr+urd+vie"
 OCR_HIDDEN_DIRECTIONAL_CHARS = dict.fromkeys(
     ord(char) for char in "\u200b\u200c\u200d\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2069\ufeff"
@@ -278,9 +279,16 @@ def _is_plausible_text(text: str, crop_bgr: np.ndarray, kind: str) -> bool:
     cleaned = re.sub(r"\s+", "", text)
     if not cleaned or len(cleaned) > 500:
         return False
-    if len(cleaned) <= 1 and not any(char.isalnum() for char in cleaned):
-        return False
     if kind == "SFX" and len(cleaned) < 2:
+        return False
+    # Ellipses, dots, dashes, and similar marks can be the complete content of
+    # a speech/thought bubble. Preserve them instead of treating them as OCR
+    # noise; narration, side text, and SFX remain intentionally stricter.
+    if not any(char.isalnum() for char in cleaned):
+        bubble_kinds = {"SPEECH", "THOUGHT", "SHOUT", "WHISPER", "SQUARE", "CAPTION", "RADIO", "ELECTRIC", "WAVY", "FUZZY_THOUGHT"}
+        if kind in bubble_kinds and len(cleaned) >= 2 and PUNCTUATION_ONLY_RE.fullmatch(text):
+            gray = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
+            return float(np.mean(gray < 180)) >= 0.001
         return False
     # Reject only a completely non-text result. Once a crop contains a
     # letter/number/script character, preserve the full OCR string—including

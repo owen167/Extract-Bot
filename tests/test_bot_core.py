@@ -94,6 +94,9 @@ class BotCoreTests(unittest.TestCase):
         self.assertTrue(_is_plausible_text("안녕 English 日本語!?", crop, "SPEECH"))
         self.assertTrue(_is_plausible_text("هذا نص عربي", crop, "NARRATION"))
         self.assertTrue(_is_plausible_text("这是中文 текст", crop, "NARRATION"))
+        dotted_bubble = np.full((80, 120, 3), 255, dtype=np.uint8)
+        cv2.putText(dotted_bubble, ".......", (15, 45), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 2)
+        self.assertTrue(_is_plausible_text(".......", dotted_bubble, "SPEECH"))
         self.assertFalse(_is_plausible_text("... --- !!!", crop, "NARRATION"))
         self.assertEqual(ExtractionSettings().ocr_languages, "eng+kor+jpn")
 
