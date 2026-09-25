@@ -1,0 +1,10 @@
+# Wispbyte/CPU-light profile for the primary ONNX comic detector.
+# Deliberately omits torch, torchvision, and ultralytics; SFX_MODEL_PATH must be blank.
+discord.py>=2.5.0,<3.0.0
+aiohttp>=3.9.0,<4.0.0
+python-dotenv>=1.0.0
+numpy>=2.0.0
+opencv-python-headless>=4.10.0
+pytesseract>=0.3.13
+gdown>=5.2.0
+onnxruntime>=1.18.0

@@ -60,6 +60,10 @@ cp .env.example .env
 Set `DISCORD_TOKEN` and `COMIC_MODEL_PATH` in `.env`. If `DISCORD_GUILD_ID` is set, the `/extract` command is synchronized to that server immediately; otherwise it is synchronized globally.
  `MANGA_MODEL_PATH` is optional and can provide the legacy Manga-Segment YOLO checkpoint; `SFX_MODEL_PATH` is also optional. The `.env` file is ignored by Git and must never be committed. All model checkpoints are ignored; store them locally or provide them through your deployment's secret/file storage. The comic and SFX checkpoints can be downloaded from their Hugging Face links above.
 
+### Wispbyte low-storage profile
+
+Use `requirements.wispbyte.txt` as the Requirements file when the host has limited disk space. It keeps the primary ONNX detector and multilingual OCR, but omits the optional PyTorch/Ultralytics SFX detector and legacy YOLO segmenter. In that profile, leave `SFX_MODEL_PATH` and `MANGA_MODEL_PATH` empty. The full `requirements.txt` remains available for local or larger hosts that need SFX detection.
+
 Run the bot:
 
 ```bash
