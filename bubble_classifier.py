@@ -59,7 +59,7 @@ def classify_bubble_shape(crop_bgr: np.ndarray) -> str:
 
     # Starburst borders have a very low convexity because of their deep points.
     # This check must happen before the thought heuristic.
-    if convexity < 0.20:
+    if convexity < 0.40:
         return "SHOUT"
 
     # Thought balloons have a dense ring of radial strokes. A smooth speech
