@@ -71,6 +71,9 @@ class ExtractionResult:
 
 def _load_segmenter(settings: ExtractionSettings):
     """Load the vendored Manga-Segment YOLO adapter lazily."""
+    if not settings.model_path:
+        return None
+
     import sys
 
     package_root = Path(__file__).resolve().parent / "manga_segment"
@@ -82,8 +85,6 @@ def _load_segmenter(settings: ExtractionSettings):
     from algorithms.yolo.weights import weights_from_dir
 
     algorithms.load_all()
-    if not settings.model_path:
-        return None
     model_path = Path(settings.model_path).expanduser()
     if model_path.is_dir():
         model_path = Path(weights_from_dir(str(model_path)))

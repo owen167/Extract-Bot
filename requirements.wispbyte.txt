@@ -6,5 +6,6 @@ python-dotenv>=1.0.0
 numpy>=2.0.0
 opencv-python-headless>=4.10.0
 pytesseract>=0.3.13
+PyYAML>=6.0
 gdown>=5.2.0
 onnxruntime>=1.18.0
