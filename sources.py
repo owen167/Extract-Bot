@@ -83,7 +83,6 @@ def download_drive_url(url: str, destination_dir: str) -> list[str]:
         url,
         output=str(destination),
         quiet=True,
-        fuzzy=True,
         use_cookies=False,
     )
     if not downloaded or not Path(downloaded).is_file():

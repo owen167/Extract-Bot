@@ -23,6 +23,7 @@ class DriveSourceTests(unittest.TestCase):
             result = download_drive_url("https://drive.google.com/file/d/example/view", temp)
             self.assertEqual(Path(result[0]).suffix, ".png")
             self.assertTrue(Path(result[0]).is_file())
+            self.assertNotIn("fuzzy", download.call_args.kwargs)
 
     @patch("gdown.download_folder")
     def test_folder_download_uses_supported_arguments(self, download_folder) -> None:
