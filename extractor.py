@@ -305,6 +305,12 @@ def _ocr_crop(crop_bgr: np.ndarray, languages: str, config: str, min_confidence:
             if candidate_text and candidate_confidence > best_confidence:
                 best_text, best_confidence = candidate_text, candidate_confidence
 
+        english_text, english_confidence = candidates.get("eng", ("", -1.0))
+        # If the mixed pass is predominantly Latin, Japanese/Chinese model
+        # hallucinations must not replace a clear English transcription.
+        if english_text and latin >= 3 and latin > cjk * 2:
+            return english_text
+
         # Mixed-language OCR often turns vertical Japanese into Latin noise.
         # Prefer the Japanese pass when it contains clear kana/kanji evidence
         # and the mixed result does not contain comparable Japanese script.
