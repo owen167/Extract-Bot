@@ -282,10 +282,6 @@ def _ocr_crop(crop_bgr: np.ndarray, languages: str, config: str, min_confidence:
     if auto_languages:
         languages = AUTO_OCR_LANGUAGES
     language_list = [part.strip() for part in languages.split("+") if part.strip()]
-    if auto_languages:
-        korean_probe, _ = run_language("kor")
-        if sum("\uac00" <= char <= "\ud7a3" for char in korean_probe) >= 4:
-            return korean_probe
     combined_text, combined_confidence = run_language(languages)
     if len(language_list) <= 1 or not combined_text:
         return combined_text
@@ -314,12 +310,6 @@ def _ocr_crop(crop_bgr: np.ndarray, languages: str, config: str, min_confidence:
         # hallucinations must not replace a clear English transcription.
         if english_text and latin >= 3 and latin > cjk * 2:
             return english_text
-
-        korean_text, korean_confidence = candidates.get("kor", ("", -1.0))
-        korean_chars = sum("\uac00" <= char <= "\ud7a3" for char in korean_text)
-        mixed_korean_chars = sum("\uac00" <= char <= "\ud7a3" for char in combined_text)
-        if korean_text and korean_chars >= 4 and korean_chars > mixed_korean_chars:
-            return korean_text
 
         # Mixed-language OCR often turns vertical Japanese into Latin noise.
         # Prefer the Japanese pass when it contains clear kana/kanji evidence
