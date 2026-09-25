@@ -206,6 +206,18 @@ class BotCoreTests(unittest.TestCase):
             self.assertEqual([path.name for path in paths], ["001.png", "002.jpg"])
             self.assertFalse((root / "escape.png").exists())
 
+    def test_valid_zip_pages_are_extracted_in_reading_order(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            archive = root / "chapter.zip"
+            ok, encoded = cv2.imencode(".png", np.full((10, 10, 3), 255, dtype=np.uint8))
+            self.assertTrue(ok)
+            with zipfile.ZipFile(archive, "w") as writer:
+                writer.writestr("nested/002.png", encoded.tobytes())
+                writer.writestr("nested/001.png", encoded.tobytes())
+            paths = expand_inputs([str(archive)], str(root / "expanded"))
+            self.assertEqual([path.name for path in paths], ["001.png", "002.png"])
+
 
 if __name__ == "__main__":
     unittest.main()

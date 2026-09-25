@@ -7,6 +7,9 @@ import zipfile
 from pathlib import Path
 from urllib.parse import urlparse
 
+import cv2
+import numpy as np
+
 DRIVE_URL_PATTERN = re.compile(r"https?://(?:drive|docs)\.google\.com/[^\s<>]+", re.IGNORECASE)
 
 
@@ -18,6 +21,26 @@ def extract_urls(text: str) -> list[str]:
 def is_google_drive_url(url: str) -> bool:
     host = (urlparse(url).hostname or "").lower()
     return host in {"drive.google.com", "docs.google.com"}
+
+
+def _image_suffix(path: Path) -> str | None:
+    """Return a reliable image suffix from bytes when a download has none."""
+    try:
+        data = np.fromfile(path, dtype=np.uint8)
+        if data.size == 0 or cv2.imdecode(data, cv2.IMREAD_UNCHANGED) is None:
+            return None
+    except (OSError, ValueError):
+        return None
+    header = path.read_bytes()[:16]
+    if header.startswith(b"\x89PNG"):
+        return ".png"
+    if header.startswith(b"\xff\xd8\xff"):
+        return ".jpg"
+    if header.startswith(b"RIFF") and header[8:12] == b"WEBP":
+        return ".webp"
+    if header.startswith((b"II*\x00", b"MM\x00*")):
+        return ".tif"
+    return ".jpg"
 
 
 def download_drive_url(url: str, destination_dir: str) -> list[str]:
@@ -74,14 +97,9 @@ def download_drive_url(url: str, destination_dir: str) -> list[str]:
         downloaded_path.rename(normalized)
         downloaded_path = normalized
     elif not downloaded_path.suffix:
-        try:
-            from PIL import Image
-
-            with Image.open(downloaded_path) as image:
-                image_suffix = ".jpg" if image.format == "JPEG" else f".{(image.format or 'png').lower()}"
+        image_suffix = _image_suffix(downloaded_path)
+        if image_suffix:
             normalized = downloaded_path.with_suffix(image_suffix)
             downloaded_path.rename(normalized)
             downloaded_path = normalized
-        except Exception:
-            pass
     return [str(downloaded_path)]

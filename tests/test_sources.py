@@ -5,10 +5,25 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import cv2
+import numpy as np
+
 from sources import download_drive_url
 
 
 class DriveSourceTests(unittest.TestCase):
+    @patch("gdown.download")
+    def test_direct_image_download_without_extension_is_normalized(self, download) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            raw = Path(temp) / "drive_chapter_download"
+            ok, encoded = cv2.imencode(".png", np.full((12, 16, 3), 255, dtype=np.uint8))
+            self.assertTrue(ok)
+            raw.write_bytes(encoded.tobytes())
+            download.return_value = str(raw)
+            result = download_drive_url("https://drive.google.com/file/d/example/view", temp)
+            self.assertEqual(Path(result[0]).suffix, ".png")
+            self.assertTrue(Path(result[0]).is_file())
+
     @patch("gdown.download_folder")
     def test_folder_download_uses_supported_arguments(self, download_folder) -> None:
         def fake_download(*args, output, **kwargs):
