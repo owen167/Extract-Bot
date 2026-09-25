@@ -304,10 +304,13 @@ async def on_ready() -> None:
         else:
             synced = await bot.tree.sync()
             print(f"Synced {len(synced)} global slash command(s).")
+            # Older builds copied the global command into every guild too,
+            # which made Discord display duplicate /extract entries. Remove
+            # those stale guild-scoped registrations and keep the global one.
             for guild in bot.guilds:
-                bot.tree.copy_global_to(guild=guild)
-                guild_synced = await bot.tree.sync(guild=guild)
-                print(f"Synced {len(guild_synced)} slash command(s) to guild {guild.id}.")
+                bot.tree.clear_commands(guild=guild)
+                await bot.tree.sync(guild=guild)
+                print(f"Cleared stale guild slash commands from {guild.id}.")
         _tree_synced = True
     print(f"Logged in as {bot.user} (id={bot.user.id})")
 

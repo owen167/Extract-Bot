@@ -22,6 +22,13 @@ from labels import DEFAULT_MODEL_LABEL_MAP, format_line
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
 PUNCTUATION_ONLY_RE = re.compile(r"^[\s.…·•*_'\-–—~!?؟،,.:;]+$")
 AUTO_OCR_LANGUAGES = "ara+chi_sim+chi_tra+deu+ell+eng+fra+heb+hin+ind+ita+jpn+kor+nld+pol+por+rus+spa+srp+tha+tur+ukr+urd+vie"
+SHAPE_PRIORITY = {
+    "SHOUT": 3,
+    "THOUGHT": 3,
+    "SQUARE": 2,
+    "CAPTION": 2,
+    "SPEECH": 1,
+}
 OCR_HIDDEN_DIRECTIONAL_CHARS = dict.fromkeys(
     ord(char) for char in "\u200b\u200c\u200d\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2069\ufeff"
 )
@@ -502,7 +509,14 @@ def extract_chapter(
                     ]
                     parent_bubble = max(
                         parent_bubbles,
-                        key=lambda bubble: _box_iou(bubble.bbox, detection.bbox),
+                        # The detector can emit a broad generic speech bubble
+                        # over a more specific SHOUT/THOUGHT contour. Prefer
+                        # the semantic shape first, then use overlap as the
+                        # tiebreaker so the text inherits the right marker.
+                        key=lambda bubble: (
+                            SHAPE_PRIORITY.get(bubble.bubble_shape or "SPEECH", 1),
+                            _box_iou(bubble.bbox, detection.bbox),
+                        ),
                         default=None,
                     )
                     detected_shape = parent_bubble.bubble_shape if parent_bubble else None
@@ -607,7 +621,18 @@ def extract_chapter(
                     deduped_lines.append(line)
                     continue
                 rejected_duplicates += 1
-                if _text_quality_score(line.text) > _text_quality_score(deduped_lines[duplicate_at].text):
+                existing = deduped_lines[duplicate_at]
+                existing_area = max(1, (existing.bbox[2] - existing.bbox[0]) * (existing.bbox[3] - existing.bbox[1]))
+                line_area = max(1, (line.bbox[2] - line.bbox[0]) * (line.bbox[3] - line.bbox[1]))
+                # A high-confidence bubble fallback is intentionally broad.
+                # When an inner text box overlaps it, prefer the smaller box;
+                # otherwise punctuation-only text such as `......` gets
+                # replaced by a noisy OCR result from the bubble border.
+                prefer_inner = (
+                    line_area < existing_area * 0.80
+                    and {line.model_label, existing.model_label} == {"text_bubble", "bubble"}
+                )
+                if prefer_inner or _text_quality_score(line.text) > _text_quality_score(existing.text):
                     deduped_lines[duplicate_at] = line
             extracted.extend(_sort_lines(deduped_lines, settings.reading_order))
             if progress_callback is not None:
