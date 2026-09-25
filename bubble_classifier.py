@@ -64,7 +64,7 @@ def classify_bubble_shape(crop_bgr: np.ndarray) -> str:
 
     # Thought balloons have a dense ring of radial strokes. A smooth speech
     # balloon has substantially fewer edge pixels in the same crop.
-    if edge_density >= 0.075 and convexity < 0.85:
+    if edge_density >= 0.055 and convexity < 0.85:
         return "THOUGHT"
 
     return "SPEECH"

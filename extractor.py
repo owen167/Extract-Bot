@@ -188,9 +188,18 @@ def _ocr_crop(crop_bgr: np.ndarray, languages: str, config: str, min_confidence:
 
     crop_rgb = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB)
     height, width = crop_rgb.shape[:2]
-    scale = 2 if max(height, width) < 1200 else 1
+    # Large detector crops already contain readable glyphs; doubling them can
+    # merge adjacent Chinese strokes and turn 那 into a different character.
+    scale = 2 if max(height, width) < 600 else 1
     if scale > 1:
         crop_rgb = cv2.resize(crop_rgb, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+
+    # Tesseract commonly returns an empty string for a row of square dots,
+    # although those marks are meaningful dialogue in manga. Detect a clean
+    # horizontal run of similarly sized dark components before OCR discards it.
+    dot_text = _detect_dot_sequence(crop_rgb)
+    if dot_text:
+        return dot_text
 
     configs = [config]
     if "--psm 6" in config:
@@ -228,18 +237,36 @@ def _ocr_crop(crop_bgr: np.ndarray, languages: str, config: str, min_confidence:
             text = text.translate(OCR_HIDDEN_DIRECTIONAL_CHARS)
             # Backslash is never a manga glyph and is a common Tesseract artifact.
             text = re.sub(r"\\", "", text).strip()
+            # OCR often inserts a space between adjacent marks such as `? !`;
+            # remove only those punctuation-adjacent spaces, not word spacing.
+            punctuation = r"[,.;:!?？！。，、；：…]"
+            text = re.sub(rf"({punctuation})\s+(?={punctuation})", r"\1", text)
+            text = re.sub(rf"(?<={punctuation})\s+({punctuation})", r"\1", text)
 
             if text:
                 best_text = text
                 best_confidence = mean_confidence
         return best_text, best_confidence
 
-    if languages.strip().lower() == "auto":
+    auto_languages = languages.strip().lower() == "auto"
+    if auto_languages:
         languages = AUTO_OCR_LANGUAGES
     language_list = [part.strip() for part in languages.split("+") if part.strip()]
     combined_text, combined_confidence = run_language(languages)
     if len(language_list) <= 1 or not combined_text:
         return combined_text
+
+    if auto_languages:
+        # A single Tesseract call with 20+ language models often chooses Latin
+        # or Arabic glyphs for clear Chinese/Korean/Japanese text. Compare a
+        # small set of script-specific passes and retain the highest-confidence
+        # transcription instead of trusting the mixed-language hallucination.
+        best_text, best_confidence = combined_text, combined_confidence
+        for language in ("chi_sim", "jpn", "kor", "ara", "rus", "eng"):
+            candidate_text, candidate_confidence = run_language(language)
+            if candidate_text and candidate_confidence > best_confidence:
+                best_text, best_confidence = candidate_text, candidate_confidence
+        return best_text
 
     chars = [char for char in combined_text if char.isalnum()]
     counts = {
@@ -272,6 +299,38 @@ def _ocr_crop(crop_bgr: np.ndarray, languages: str, config: str, min_confidence:
     if preferred_text and preferred_confidence >= max(min_confidence, combined_confidence - 25.0):
         return preferred_text
     return combined_text
+
+
+def _detect_dot_sequence(image_rgb: np.ndarray) -> str:
+    """Return dots when a crop contains only a clean horizontal dot sequence."""
+    gray = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY)
+    mask = (gray < 160).astype(np.uint8)
+    ink_ratio = float(np.mean(mask > 0))
+    if not 0.002 <= ink_ratio <= 0.09:
+        return ""
+    count, _, stats, centers = cv2.connectedComponentsWithStats(mask, 8)
+    components: list[tuple[int, int, int, int, int, float, float]] = []
+    for index in range(1, count):
+        x, y, width, height, area = [int(value) for value in stats[index]]
+        if 4 <= area <= max(500, image_rgb.shape[0] * image_rgb.shape[1] // 12):
+            components.append((x, y, width, height, area, float(centers[index][0]), float(centers[index][1])))
+    if len(components) < 3 or len(components) > 20:
+        return ""
+    median_width = float(np.median([item[2] for item in components]))
+    median_height = float(np.median([item[3] for item in components]))
+    median_area = float(np.median([item[4] for item in components]))
+    row = [item for item in components if abs(item[6] - np.median([part[6] for part in components])) <= max(5.0, median_height * 0.65)]
+    row.sort(key=lambda item: item[0])
+    if len(row) < 3:
+        return ""
+    if any(abs(item[2] - median_width) > median_width or abs(item[3] - median_height) > median_height for item in row):
+        return ""
+    if any(abs(item[4] - median_area) > median_area * 1.5 for item in row):
+        return ""
+    gaps = [right[0] - (left[0] + left[2]) for left, right in zip(row, row[1:])]
+    if not gaps or min(gaps) < max(1, int(median_width * 0.5)) or max(gaps) > median_width * 8:
+        return ""
+    return "." * len(row)
 
 
 def _is_plausible_text(text: str, crop_bgr: np.ndarray, kind: str) -> bool:
