@@ -81,7 +81,7 @@ class BotCoreTests(unittest.TestCase):
 
             self.assertEqual(result.total_images, 1)
             self.assertEqual(result.failed_images, 0)
-            self.assertIn("--- Page 1 ---", result.output_text)
+            self.assertIn("=== PAGE 1 ===", result.output_text)
             self.assertIn("(): upper text", result.output_text)
             self.assertIn('"": lower text', result.output_text)
             self.assertLess(result.output_text.index("upper text"), result.output_text.index("lower text"))

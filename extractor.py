@@ -446,6 +446,28 @@ def _is_credit_overlay(text: str) -> bool:
     return any(term in normalized for term in CREDIT_OVERLAY_TERMS)
 
 
+def _output_language(lines: list[ExtractedLine], configured: str) -> str:
+    configured = configured.strip().lower()
+    names = {
+        "ara": "Arabic", "chi_sim": "Chinese", "chi_tra": "Chinese",
+        "eng": "English", "jpn": "Japanese", "kor": "Korean",
+        "rus": "Russian", "auto": "Auto",
+    }
+    if configured != "auto" and "+" not in configured:
+        return names.get(configured, configured.title())
+    text = " ".join(line.text for line in lines)
+    counts = {
+        "Korean": sum("\uac00" <= c <= "\ud7a3" for c in text),
+        "Japanese": sum(("\u3040" <= c <= "\u30ff") for c in text),
+        "Chinese": sum("\u4e00" <= c <= "\u9fff" for c in text),
+        "Arabic": sum("\u0600" <= c <= "\u06ff" for c in text),
+        "Russian": sum("\u0400" <= c <= "\u04ff" for c in text),
+        "English": sum(("A" <= c <= "Z") or ("a" <= c <= "z") for c in text),
+    }
+    winner, amount = max(counts.items(), key=lambda item: item[1])
+    return winner if amount else "Auto"
+
+
 def _mask_bbox(mask: np.ndarray, width: int, height: int) -> tuple[int, int, int, int] | None:
     binary = np.where(mask > 0.5, 255, 0).astype(np.uint8)
     if binary.shape != (height, width):
@@ -714,11 +736,17 @@ def extract_chapter(
     for line in extracted:
         pages.setdefault(line.page, []).append(line)
 
-    output: list[str] = []
-    for page in sorted(pages):
-        output.append(f"--- Page {page} ---")
+    output: list[str] = [
+        f"MANHWA OCR — Language: {_output_language(extracted, settings.ocr_languages)} — "
+        f"Pages: {len(image_paths)} — Bubbles: {total_bubbles}",
+        "═" * 60,
+        "",
+        "",
+    ]
+    for page in range(1, len(image_paths) + 1):
+        output.append(f"=== PAGE {page} ===")
         previous_line: ExtractedLine | None = None
-        for line in pages[page]:
+        for line in pages.get(page, []):
             sequence = 1
             if (
                 previous_line is not None
