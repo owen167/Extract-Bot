@@ -85,7 +85,7 @@ class BotCoreTests(unittest.TestCase):
             self.assertIn("(): upper text", result.output_text)
             self.assertIn('"": lower text', result.output_text)
             self.assertLess(result.output_text.index("upper text"), result.output_text.index("lower text"))
-            self.assertEqual(progress, [(1, 1, 2, 2)])
+            self.assertEqual(progress, [(1, 1, 0, 0), (1, 1, 2, 2)])
 
     def test_ocr_quality_gate_rejects_noise_and_keeps_korean(self) -> None:
         crop = np.zeros((80, 120, 3), dtype=np.uint8)

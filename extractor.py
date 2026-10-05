@@ -21,7 +21,9 @@ from labels import DEFAULT_MODEL_LABEL_MAP, format_line
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
 PUNCTUATION_ONLY_RE = re.compile(r"^[\s.…·•*_'\-–—~!?؟،,.:;]+$")
-AUTO_OCR_LANGUAGES = "ara+chi_sim+chi_tra+deu+ell+eng+fra+heb+hin+ind+ita+jpn+kor+nld+pol+por+rus+spa+srp+tha+tur+ukr+urd+vie"
+# Keep the automatic pass broad enough for the supported manga scripts without
+# invoking two dozen Tesseract models for every detected bubble.
+AUTO_OCR_LANGUAGES = "ara+chi_sim+chi_tra+eng+jpn+kor+rus"
 SHAPE_PRIORITY = {
     "SHOUT": 3,
     "THOUGHT": 3,
@@ -568,6 +570,8 @@ def extract_chapter(
         if image is None:
             failed += 1
             continue
+        if progress_callback is not None:
+            progress_callback(page_number, len(image_paths), len(extracted), total_bubbles)
         try:
             height, width = image.shape[:2]
             page_lines: list[ExtractedLine] = []
