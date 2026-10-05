@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import shutil
 import tempfile
 import time
@@ -16,7 +17,7 @@ from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
 
-from extractor import expand_inputs, extract_chapter, settings_from_env
+from extractor import _output_language, expand_inputs, extract_chapter, settings_from_env
 from sources import download_drive_url, extract_urls
 
 load_dotenv()
@@ -35,31 +36,59 @@ def brand_embed(title: str, description: str, color: int) -> discord.Embed:
 
 
 def stats_embed(result, chapter_name: str) -> discord.Embed:
+    chapter_label = chapter_name.strip() or "Unknown"
+    chapter_match = re.search(r"(?:chapter|ch|chap|episode|ep)[ _.-]*([0-9]+)", chapter_label, re.I)
+    chapter_number = chapter_match.group(1) if chapter_match else chapter_label
+    language = _output_language(result.lines, os.getenv("OCR_LANGUAGES", "eng+kor+jpn"))
+    extracted_pages = max(0, result.total_images - result.failed_images)
+    status = "✅ Complete" if result.failed_images == 0 else "⚠️ Complete with warnings"
     embed = brand_embed(
-        "✅ Extraction Complete!",
-        f"The text extraction for **{chapter_name}** has finished successfully.",
-        discord.Color.green().value,
+        f"{status} — Extract ({language})",
+        f"**Chapter {chapter_number}**\nYour manga/manhwa text extraction is ready.",
+        discord.Color.green().value if result.failed_images == 0 else discord.Color.orange().value,
     )
     embed.add_field(
-        name="📊 Extraction Stats",
+        name="📖 Chapter",
+        value=f"**{chapter_number}**\n`{result.output_name}.txt`",
+        inline=True,
+    )
+    embed.add_field(
+        name="🌐 Language",
+        value=f"**{language}**",
+        inline=True,
+    )
+    embed.add_field(
+        name="📄 Pages",
+        value=f"**{extracted_pages}** / {result.total_images}",
+        inline=True,
+    )
+    embed.add_field(
+        name="💬 Extraction",
         value=(
-            f"• Total images: **{result.total_images}**\n"
-            f"• Bubbles detected: **{result.total_bubbles}**\n"
-            f"• Text regions: **{len(result.lines)}**\n"
-            f"• OCR candidates: **{result.text_candidates}**\n"
-            f"• Rejected low-quality: **{result.rejected_low_quality}**\n"
-            f"• Removed duplicates: **{result.rejected_duplicates}**\n"
-            f"• Text extracted: **{sum(len(line.text) for line in result.lines)} characters**\n"
-            f"• Failed images: **{result.failed_images}**"
+            f"Bubbles: **{result.total_bubbles}**\n"
+            f"Text regions: **{len(result.lines)}**\n"
+            f"Characters: **{sum(len(line.text) for line in result.lines):,}**"
         ),
-        inline=False,
+        inline=True,
     )
     embed.add_field(
-        name="⏱️ Processing Time",
-        value=f"• Total: **{result.elapsed_seconds:.2f}s**",
+        name="⏱️ Timing",
+        value=f"Total: **{result.elapsed_seconds:.2f}s**",
+        inline=True,
+    )
+    embed.add_field(
+        name="📌 Status",
+        value=(
+            "✅ All pages processed" if result.failed_images == 0
+            else f"❌ Failed pages: **{result.failed_images}**"
+        ),
+        inline=True,
+    )
+    embed.add_field(
+        name="📎 Result",
+        value="The extracted text file is attached below.",
         inline=False,
     )
-    embed.add_field(name="📄 Output", value=f"`{result.output_name}.txt`", inline=False)
     return embed
 
 
