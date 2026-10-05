@@ -197,6 +197,7 @@ def _ocr_crop(crop_bgr: np.ndarray, languages: str, config: str, min_confidence:
         raise RuntimeError("pytesseract is not installed; install requirements.txt") from exc
 
     crop_rgb = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB)
+    ocr_timeout = float(os.getenv("OCR_TIMEOUT_SECONDS", "12"))
     height, width = crop_rgb.shape[:2]
     # Large detector crops already contain readable glyphs; doubling them can
     # merge adjacent Chinese strokes and turn 那 into a different character.
@@ -241,12 +242,16 @@ def _ocr_crop(crop_bgr: np.ndarray, languages: str, config: str, min_confidence:
         ocr_language = "jpn_vert" if language == "jpn" and height > width * 1.35 else language
         for image in image_variants:
             for candidate_config in dict.fromkeys(configs):
-                data = pytesseract.image_to_data(
-                    image,
-                    lang=ocr_language,
-                    config=candidate_config,
-                    output_type=pytesseract.Output.DICT,
-                )
+                try:
+                    data = pytesseract.image_to_data(
+                        image,
+                        lang=ocr_language,
+                        config=candidate_config,
+                        output_type=pytesseract.Output.DICT,
+                        timeout=ocr_timeout,
+                    )
+                except RuntimeError:
+                    continue
                 confidences: list[float] = []
                 for raw_text, raw_conf in zip(data.get("text", []), data.get("conf", [])):
                     if not str(raw_text).strip():
@@ -260,7 +265,12 @@ def _ocr_crop(crop_bgr: np.ndarray, languages: str, config: str, min_confidence:
                 mean_confidence = sum(confidences) / len(confidences) if confidences else -1.0
                 if mean_confidence < best_confidence:
                     continue
-                text = pytesseract.image_to_string(image, lang=ocr_language, config=candidate_config)
+                try:
+                    text = pytesseract.image_to_string(
+                        image, lang=ocr_language, config=candidate_config, timeout=ocr_timeout
+                    )
+                except RuntimeError:
+                    continue
                 text = " ".join(line.strip() for line in text.splitlines() if line.strip()).strip()
                 # Remove invisible bidi/zero-width controls that make Arabic appear
                 # split or surrounded by unexplained marks in Discord/TXT output.
