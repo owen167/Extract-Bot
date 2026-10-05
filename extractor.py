@@ -720,6 +720,12 @@ def extract_chapter(
                         )
                         if has_inner_text_free:
                             continue
+                        if any(
+                            item[1] == "text_free"
+                            and _box_gap(item[3], detection.bbox) <= 20
+                            for item in candidates
+                        ):
+                            continue
                     # text_free is often emitted on top of a text_bubble box by
                     # this checkpoint. Prefer the in-bubble text classification.
                     if detection.label == "text_free" and (
@@ -815,6 +821,16 @@ def extract_chapter(
                         or char.isascii() and char.isalpha()
                         for char in text
                     )
+                    locked = (locked_language or "").lower()
+                    if locked in {"chi_sim", "chi_tra"}:
+                        script = sum("\u4e00" <= char <= "\u9fff" for char in text)
+                    elif locked == "jpn":
+                        script = sum(
+                            ("\u3040" <= char <= "\u30ff") or ("\u4e00" <= char <= "\u9fff")
+                            for char in text
+                        )
+                    elif locked == "kor":
+                        script = sum("\uac00" <= char <= "\ud7a3" for char in text)
                     symbols = sum(not char.isalnum() and not char.isspace() for char in text)
                     if len(alnum) < 2 or script / max(1, len(alnum)) < 0.45 or symbols > len(text) * 0.38:
                         rejected_low_quality += 1
