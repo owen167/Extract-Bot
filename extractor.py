@@ -709,6 +709,17 @@ def extract_chapter(
                     )
                     if detection.label == "text_free" and parent_bubble is None:
                         kind = "NARRATION"
+                        dx0, dy0, dx1, dy1 = detection.bbox
+                        detection_area = max(1, (dx1 - dx0) * (dy1 - dy0))
+                        has_inner_text_free = any(
+                            other.label == "text_free"
+                            and other is not detection
+                            and _box_center_inside(other.bbox, detection.bbox)
+                            and detection_area > max(1, (other.bbox[2] - other.bbox[0]) * (other.bbox[3] - other.bbox[1])) * 1.45
+                            for other in comic_detections
+                        )
+                        if has_inner_text_free:
+                            continue
                     # text_free is often emitted on top of a text_bubble box by
                     # this checkpoint. Prefer the in-bubble text classification.
                     if detection.label == "text_free" and (
@@ -795,6 +806,19 @@ def extract_chapter(
                 if _is_credit_overlay(text):
                     rejected_low_quality += 1
                     continue
+                if kind in {"NARRATION", "SIDE_TEXT"}:
+                    alnum = [char for char in text if char.isalnum()]
+                    script = sum(
+                        ("\u4e00" <= char <= "\u9fff")
+                        or ("\u3040" <= char <= "\u30ff")
+                        or ("\uac00" <= char <= "\ud7a3")
+                        or char.isascii() and char.isalpha()
+                        for char in text
+                    )
+                    symbols = sum(not char.isalnum() and not char.isspace() for char in text)
+                    if len(alnum) < 2 or script / max(1, len(alnum)) < 0.45 or symbols > len(text) * 0.38:
+                        rejected_low_quality += 1
+                        continue
                 if len(text) < settings.min_text_length or not _is_plausible_text(text, crop, kind):
                     rejected_low_quality += 1
                     continue
