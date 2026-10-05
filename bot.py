@@ -64,11 +64,7 @@ def stats_embed(result, chapter_name: str) -> discord.Embed:
     )
     embed.add_field(
         name="💬 Extraction",
-        value=(
-            f"Bubbles: **{result.total_bubbles}**\n"
-            f"Text regions: **{len(result.lines)}**\n"
-            f"Characters: **{sum(len(line.text) for line in result.lines):,}**"
-        ),
+        value=f"Bubbles: **{result.total_bubbles}**",
         inline=True,
     )
     embed.add_field(
