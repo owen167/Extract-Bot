@@ -49,7 +49,7 @@ def stats_embed(result, chapter_name: str) -> discord.Embed:
     )
     embed.add_field(
         name="📖 Chapter",
-        value=f"**{chapter_number}**\n`{result.output_name}.txt`",
+        value=f"**{chapter_number}**",
         inline=True,
     )
     embed.add_field(
