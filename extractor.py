@@ -856,7 +856,12 @@ def extract_chapter(
                         position
                         for position, existing in enumerate(deduped_lines)
                         if existing.kind == line.kind
-                        and (_box_iou(existing.bbox, line.bbox) >= 0.30 or _box_center_inside(line.bbox, existing.bbox) or _box_center_inside(existing.bbox, line.bbox))
+                        and (
+                            _box_iou(existing.bbox, line.bbox) >= 0.30
+                            or _box_center_inside(line.bbox, existing.bbox)
+                            or _box_center_inside(existing.bbox, line.bbox)
+                            or (line.kind == "NARRATION" and _box_gap(existing.bbox, line.bbox) <= 20)
+                        )
                     ),
                     None,
                 )
