@@ -744,7 +744,7 @@ def extract_chapter(
         "",
     ]
     for page in range(1, len(image_paths) + 1):
-        output.append(f"=== PAGE {page} ===")
+        output.append(f"--- Page {page} ---")
         previous_line: ExtractedLine | None = None
         for line in pages.get(page, []):
             sequence = 1
