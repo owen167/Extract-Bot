@@ -388,7 +388,21 @@ def _ocr_free_text_crop(
             )
             candidates.append(_ocr_crop(rotated, languages, config, min_confidence))
     usable = [text for text in candidates if text.strip()]
-    return max(usable, key=lambda text: _text_quality_score(text), default="")
+
+    def score(text: str) -> float:
+        script = sum(
+            ("\u4e00" <= c <= "\u9fff")
+            or ("\u3040" <= c <= "\u30ff")
+            or ("\uac00" <= c <= "\ud7a3")
+            or ("A" <= c <= "Z")
+            or ("a" <= c <= "z")
+            for c in text
+        )
+        digits = sum(c.isdigit() for c in text)
+        symbols = sum(not c.isalnum() and not c.isspace() for c in text)
+        return script * 1.4 - digits * 0.8 - symbols * 0.2
+
+    return max(usable, key=score, default="")
 
 
 def _detect_dot_sequence(image_rgb: np.ndarray) -> str:
