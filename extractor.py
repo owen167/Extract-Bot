@@ -820,7 +820,7 @@ def extract_chapter(
             if (
                 previous_line is not None
                 and previous_line.kind == line.kind
-                and line.kind in {"SPEECH", "THOUGHT", "SQUARE", "CAPTION"}
+                and line.kind not in {"NARRATION", "SIDE_TEXT", "SFX"}
                 and _are_paired_bubbles(previous_line.bbox, line.bbox)
             ):
                 sequence = 2

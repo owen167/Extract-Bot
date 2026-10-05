@@ -43,13 +43,16 @@ DEFAULT_MODEL_LABEL_MAP: dict[str, str] = {
 }
 
 
-DOUBLE_MARKER_KINDS = {"SPEECH", "THOUGHT", "SQUARE", "CAPTION"}
+PAIRABLE_BUBBLE_KINDS = {
+    "SPEECH", "THOUGHT", "SHOUT", "WHISPER", "SQUARE", "CAPTION",
+    "RADIO", "ELECTRIC", "WAVY", "FUZZY_THOUGHT", "SYSTEM",
+}
 
 
 def format_line(kind: str, text: str, sequence: int = 1) -> str:
     """Prefix OCR text with the requested marker, including paired bubbles."""
     spec = LABELS.get(kind, LABELS["SIDE_TEXT"])
-    marker = "//:" if kind in DOUBLE_MARKER_KINDS and sequence >= 2 else spec.marker
+    marker = "//:" if kind in PAIRABLE_BUBBLE_KINDS and sequence >= 2 else spec.marker
     return f"{marker} {text.strip()}"
 
 
