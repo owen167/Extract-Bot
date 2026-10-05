@@ -496,18 +496,18 @@ def _detect_primary_language(crop: np.ndarray, config: str, min_confidence: floa
         else:
             script = sum("\uac00" <= c <= "\ud7a3" for c in text)
         digits = sum(c.isdigit() for c in text)
-        other_alnum = sum(c.isalnum() for c in text) - script
-        return script + (script / max(1, script + other_alnum + digits)) * 12 - digits * 0.25
+        symbols = sum(not c.isalnum() and not c.isspace() for c in text)
+        return script * 1.5 - digits * 0.6 - symbols * 0.25
 
-    hangul = sum("\uac00" <= c <= "\ud7a3" for c in texts["kor"])
-    kana_han = sum(("\u3040" <= c <= "\u30ff") or ("\u4e00" <= c <= "\u9fff") for c in texts["jpn"])
-    han = sum("\u4e00" <= c <= "\u9fff" for c in texts["chi_sim"])
-    if hangul >= 8 and hangul / max(1, sum(c.isalnum() for c in texts["kor"])) >= 0.40:
-        return "kor"
-    if kana_han >= 8 and kana_han / max(1, sum(c.isalnum() for c in texts["jpn"])) >= 0.35:
-        return "jpn"
-    if han >= 8 and han / max(1, sum(c.isalnum() for c in texts["chi_sim"])) >= 0.35:
-        return "chi_sim"
+    for language, start, end in (
+        ("kor", "\uac00", "\ud7a3"),
+        ("jpn", "\u3040", "\u30ff"),
+        ("chi_sim", "\u4e00", "\u9fff"),
+    ):
+        text = texts[language]
+        script_count = sum(start <= c <= end for c in text)
+        if script_count >= 10 and not any(c.isdigit() for c in text):
+            return language
     scores = {language: evidence(language, text) for language, text in texts.items()}
     return max(scores, key=scores.get)
 
