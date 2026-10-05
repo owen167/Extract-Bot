@@ -24,6 +24,7 @@ PUNCTUATION_ONLY_RE = re.compile(r"^[\s.…·•*_'\-–—~!?؟،,.:;]+$")
 # Keep the automatic pass broad enough for the supported manga scripts without
 # invoking two dozen Tesseract models for every detected bubble.
 AUTO_OCR_LANGUAGES = "ara+chi_sim+chi_tra+eng+jpn+kor+rus"
+PRIMARY_OCR_LANGUAGES = ("eng", "jpn", "chi_sim", "kor")
 SHAPE_PRIORITY = {
     "SHOUT": 3,
     "THOUGHT": 3,
@@ -480,6 +481,37 @@ def _output_language(lines: list[ExtractedLine], configured: str) -> str:
     return winner if amount else "Auto"
 
 
+def _detect_primary_language(crop: np.ndarray, config: str, min_confidence: float) -> str:
+    """Choose one primary manga language from the first detected text region."""
+    texts: dict[str, str] = {}
+    for language in PRIMARY_OCR_LANGUAGES:
+        texts[language] = _ocr_crop(crop, language, config, min_confidence)
+    def evidence(language: str, text: str) -> float:
+        if language == "eng":
+            script = sum(("A" <= c <= "Z") or ("a" <= c <= "z") for c in text)
+        elif language == "jpn":
+            script = sum(("\u3040" <= c <= "\u30ff") or ("\u4e00" <= c <= "\u9fff") for c in text)
+        elif language == "chi_sim":
+            script = sum("\u4e00" <= c <= "\u9fff" for c in text)
+        else:
+            script = sum("\uac00" <= c <= "\ud7a3" for c in text)
+        digits = sum(c.isdigit() for c in text)
+        other_alnum = sum(c.isalnum() for c in text) - script
+        return script + (script / max(1, script + other_alnum + digits)) * 12 - digits * 0.25
+
+    hangul = sum("\uac00" <= c <= "\ud7a3" for c in texts["kor"])
+    kana_han = sum(("\u3040" <= c <= "\u30ff") or ("\u4e00" <= c <= "\u9fff") for c in texts["jpn"])
+    han = sum("\u4e00" <= c <= "\u9fff" for c in texts["chi_sim"])
+    if hangul >= 8 and hangul / max(1, sum(c.isalnum() for c in texts["kor"])) >= 0.40:
+        return "kor"
+    if kana_han >= 8 and kana_han / max(1, sum(c.isalnum() for c in texts["jpn"])) >= 0.35:
+        return "jpn"
+    if han >= 8 and han / max(1, sum(c.isalnum() for c in texts["chi_sim"])) >= 0.35:
+        return "chi_sim"
+    scores = {language: evidence(language, text) for language, text in texts.items()}
+    return max(scores, key=scores.get)
+
+
 def _mask_bbox(mask: np.ndarray, width: int, height: int) -> tuple[int, int, int, int] | None:
     binary = np.where(mask > 0.5, 255, 0).astype(np.uint8)
     if binary.shape != (height, width):
@@ -574,6 +606,7 @@ def extract_chapter(
     rejected_low_quality = 0
     rejected_duplicates = 0
     failed = 0
+    locked_language: str | None = None
 
     for page_number, raw_path in enumerate(image_paths, start=1):
         image = cv2.imread(str(raw_path), cv2.IMREAD_COLOR)
@@ -687,12 +720,31 @@ def extract_chapter(
                     candidates.append((len(candidates), f"sfx:{candidate.label}", "SFX", candidate.bbox, None))
 
             text_candidates += len(candidates)
+            if locked_language is None and candidates:
+                first_candidate = min(candidates, key=lambda item: (item[3][1], item[3][0]))
+                first_bbox = first_candidate[3]
+                first_crop = (
+                    _masked_crop(image, first_candidate[4], first_bbox)
+                    if first_candidate[4] is not None
+                    else image[first_bbox[1]:first_bbox[3], first_bbox[0]:first_bbox[2]]
+                )
+                locked_language = _detect_primary_language(
+                    first_crop,
+                    settings.ocr_config,
+                    getattr(settings, "ocr_min_confidence", 15.0),
+                )
+                print(f"Locked OCR language from first bubble: {locked_language}")
             for index, model_label, kind, bbox, mask in candidates:
                 crop = _masked_crop(image, mask, bbox) if mask is not None else image[bbox[1]:bbox[3], bbox[0]:bbox[2]]
                 ocr_config = settings.ocr_config
                 if kind == "SFX":
                     ocr_config = os.getenv("SFX_OCR_CONFIG", "--oem 1 --psm 11")
-                text = _ocr_crop(crop, settings.ocr_languages, ocr_config, getattr(settings, "ocr_min_confidence", 15.0))
+                text = _ocr_crop(
+                    crop,
+                    locked_language or settings.ocr_languages,
+                    ocr_config,
+                    getattr(settings, "ocr_min_confidence", 15.0),
+                )
                 if _is_credit_overlay(text):
                     rejected_low_quality += 1
                     continue
@@ -750,13 +802,7 @@ def extract_chapter(
     for line in extracted:
         pages.setdefault(line.page, []).append(line)
 
-    output: list[str] = [
-        f"MANHWA OCR — Language: {_output_language(extracted, settings.ocr_languages)} — "
-        f"Pages: {len(image_paths)} — Bubbles: {total_bubbles}",
-        "═" * 60,
-        "",
-        "",
-    ]
+    output: list[str] = []
     for page in range(1, len(image_paths) + 1):
         output.append(f"--- Page {page} ---")
         previous_line: ExtractedLine | None = None

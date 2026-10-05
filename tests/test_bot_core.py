@@ -70,7 +70,7 @@ class BotCoreTests(unittest.TestCase):
             })()
             progress: list[tuple[int, int, int, int]] = []
             with patch("extractor._load_segmenter", return_value=FakeSegmenter()), patch(
-                "extractor._ocr_crop", side_effect=["lower text", "upper text"]
+                "extractor._ocr_crop", side_effect=["text"] * 4 + ["lower text", "upper text"]
             ), patch("extractor._is_plausible_text", return_value=True):
                 result = extract_chapter(
                     [str(image_path)],
