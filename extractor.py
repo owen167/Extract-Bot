@@ -197,7 +197,7 @@ def _ocr_crop(crop_bgr: np.ndarray, languages: str, config: str, min_confidence:
         raise RuntimeError("pytesseract is not installed; install requirements.txt") from exc
 
     crop_rgb = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB)
-    ocr_timeout = float(os.getenv("OCR_TIMEOUT_SECONDS", "12"))
+    ocr_timeout = float(os.getenv("OCR_TIMEOUT_SECONDS", "5"))
     height, width = crop_rgb.shape[:2]
     # Large detector crops already contain readable glyphs; doubling them can
     # merge adjacent Chinese strokes and turn 那 into a different character.
@@ -808,7 +808,9 @@ def settings_from_env() -> ExtractionSettings:
         model_path=model_path,
         comic_model_path=comic_model_path,
         sfx_model_path=sfx_model_path,
-        ocr_languages=os.getenv("OCR_LANGUAGES", "auto"),
+        # The common manga set avoids the very expensive all-language pass by
+        # default. Add any extra Tesseract language codes through .env.
+        ocr_languages=os.getenv("OCR_LANGUAGES", "eng+kor+jpn"),
         ocr_config=os.getenv("OCR_CONFIG", "--oem 1 --psm 6"),
         model_confidence=float(os.getenv("MODEL_CONFIDENCE", "0.35")),
         sfx_confidence=float(os.getenv("SFX_CONFIDENCE", "0.70")),
