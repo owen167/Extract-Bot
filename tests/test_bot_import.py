@@ -31,7 +31,7 @@ class BotImportTests(unittest.TestCase):
             response = FakeResponse()
             followup = FakeFollowup()
 
-        asyncio.run(bot.extract_command.callback(FakeInteraction()))
+        asyncio.run(bot.extract_command.callback(FakeInteraction(), "16"))
         self.assertEqual(events, ["defer", "followup"])
 
     def test_attachment_download_retries_after_truncated_response(self) -> None:
@@ -53,7 +53,7 @@ class BotImportTests(unittest.TestCase):
         self.assertEqual([command.name for command in commands], ["extract"])
         self.assertEqual(
             [parameter.name for parameter in commands[0].parameters],
-            ["image", "zip_file", "drive_url", "chapter_name"],
+            ["chapter_name", "image", "zip_file", "drive_url"],
         )
 
 

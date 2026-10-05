@@ -348,7 +348,7 @@ async def on_ready() -> None:
     image="Image to extract (optional)",
     zip_file="ZIP/CBZ file containing images (optional)",
     drive_url="Public Google Drive file or folder link (optional)",
-    chapter_name="Output filename without extension (optional)",
+    chapter_name="Chapter number (required)",
 )
 @app_commands.command(
     name=app_commands.locale_str("extract", ar="استخراج"),
@@ -359,15 +359,19 @@ async def on_ready() -> None:
 )
 async def extract_command(
     interaction: discord.Interaction,
+    chapter_name: str,
     image: discord.Attachment | None = None,
     zip_file: discord.Attachment | None = None,
     drive_url: str | None = None,
-    chapter_name: str | None = None,
 ) -> None:
     # Discord requires an acknowledgement within a few seconds. Defer before
     # even inspecting attachments or parsing URLs so slow/faulty inputs cannot
     # produce the generic "Application did not respond" message.
     await interaction.response.defer()
+    chapter_name = chapter_name.strip()
+    if not re.fullmatch(r"\d+", chapter_name):
+        await send_error(interaction, "The **chapter number** is required and must contain digits only, for example `16`.")
+        return
     attachments = [attachment for attachment in (image, zip_file) if attachment is not None]
     drive_urls = extract_urls(drive_url or "")
 
@@ -395,7 +399,7 @@ async def extract_command(
         interaction,
         attachments,
         drive_urls,
-        (chapter_name or "").strip(),
+        chapter_name,
         progress_message,
     )
 

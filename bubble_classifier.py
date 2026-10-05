@@ -54,7 +54,7 @@ def classify_bubble_shape(crop_bgr: np.ndarray) -> str:
 
     # Clean rectangular caption/square borders have high rectangularity and
     # very few vertices after approximation.
-    if vertices <= 6 and rectangularity >= 0.72:
+    if vertices <= 8 and rectangularity >= 0.65:
         return "SQUARE"
 
     # Starburst borders have a very low convexity because of their deep points.
@@ -64,7 +64,7 @@ def classify_bubble_shape(crop_bgr: np.ndarray) -> str:
 
     # Thought balloons have a dense ring of radial strokes. A smooth speech
     # balloon has substantially fewer edge pixels in the same crop.
-    if edge_density >= 0.09 and convexity < 0.65:
+    if edge_density >= 0.07 and convexity < 0.70:
         return "THOUGHT"
 
     return "SPEECH"
