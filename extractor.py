@@ -558,6 +558,15 @@ def _box_gap(first: tuple[int, int, int, int], second: tuple[int, int, int, int]
     return float((dx * dx + dy * dy) ** 0.5)
 
 
+def _are_paired_bubbles(first: tuple[int, int, int, int], second: tuple[int, int, int, int]) -> bool:
+    """Detect two dialogue boxes that touch/overlap as one paired balloon."""
+    ax0, _, ax1, _ = first
+    bx0, _, bx1, _ = second
+    overlap = max(0, min(ax1, bx1) - max(ax0, bx0))
+    minimum_width = max(1, min(ax1 - ax0, bx1 - bx0))
+    return _box_gap(first, second) <= 100 and overlap / minimum_width >= 0.40
+
+
 def _box_iou(first: tuple[int, int, int, int], second: tuple[int, int, int, int]) -> float:
     ax0, ay0, ax1, ay1 = first
     bx0, by0, bx1, by1 = second
@@ -812,7 +821,7 @@ def extract_chapter(
                 previous_line is not None
                 and previous_line.kind == line.kind
                 and line.kind in {"SPEECH", "THOUGHT", "SQUARE", "CAPTION"}
-                and _box_gap(previous_line.bbox, line.bbox) <= 12
+                and _are_paired_bubbles(previous_line.bbox, line.bbox)
             ):
                 sequence = 2
             output.append(format_line(line.kind, line.text, sequence))
