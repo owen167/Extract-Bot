@@ -44,7 +44,7 @@ def stats_embed(result, chapter_name: str) -> discord.Embed:
     status = "✅ Complete" if result.failed_images == 0 else "⚠️ Complete with warnings"
     embed = brand_embed(
         f"{status} — Extract ({language})",
-        f"**Chapter {chapter_number}**\nYour manga/manhwa text extraction is ready.",
+        f"**Chapter {chapter_number}**",
         discord.Color.green().value if result.failed_images == 0 else discord.Color.orange().value,
     )
     embed.add_field(
