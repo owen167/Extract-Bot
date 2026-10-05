@@ -44,6 +44,12 @@ def classify_bubble_shape(crop_bgr: np.ndarray) -> str:
         return "SPEECH"
     bbox_area = float(max(1, width * height))
     gray = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
+    # Rectangular narration/recording boxes have a large, nearly uniform white
+    # interior. This fallback is useful when the detector's contour lands on a
+    # glyph and incorrectly reports a thought balloon.
+    bright_ratio = float(np.mean(gray > 200))
+    if bright_ratio >= 0.73:
+        return "SQUARE"
     edge_map = cv2.Canny(cv2.GaussianBlur(gray, (5, 5), 0), 35, 120)
     edge_density = float(np.mean(edge_map > 0))
     rectangularity = area / bbox_area

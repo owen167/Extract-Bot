@@ -428,6 +428,11 @@ def _is_plausible_text(text: str, crop_bgr: np.ndarray, kind: str) -> bool:
     cleaned = re.sub(r"\s+", "", text)
     if not cleaned or len(cleaned) > 500:
         return False
+    # Dark panel textures and vents are frequently hallucinated as repeated
+    # Latin letters (for example ``Sssss``). They are not meaningful narration.
+    alpha_only = re.sub(r"[^A-Za-z]", "", cleaned).lower()
+    if len(alpha_only) >= 4 and len(set(alpha_only)) <= 2:
+        return False
     if kind == "SFX" and len(cleaned) < 2:
         return False
     # Ellipses, dots, dashes, and similar marks can be the complete content of
@@ -470,6 +475,13 @@ def _is_plausible_text(text: str, crop_bgr: np.ndarray, kind: str) -> bool:
     # decorative texture. Keep speech crops less strict than side/SFX crops.
     minimum_ink = 0.004 if kind in {"SPEECH", "THOUGHT", "SHOUT", "SQUARE", "CAPTION"} else 0.010
     return ink_ratio >= minimum_ink
+
+
+def _looks_like_color_sfx(crop_bgr: np.ndarray) -> bool:
+    """Detect stylized colored SFX lettering outside a speech balloon."""
+    hsv = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2HSV)
+    saturated = (hsv[:, :, 1] > 95) & (hsv[:, :, 2] > 80)
+    return float(np.mean(saturated)) >= 0.035
 
 
 def _is_credit_overlay(text: str) -> bool:
@@ -690,6 +702,9 @@ def extract_chapter(
                     )
                     if detection.label == "text_free" and parent_bubble is None:
                         kind = "NARRATION"
+                        dx0, dy0, dx1, dy1 = detection.bbox
+                        if _looks_like_color_sfx(image[dy0:dy1, dx0:dx1]):
+                            kind = "SFX"
                     # text_free is often emitted on top of a text_bubble box by
                     # this checkpoint. Prefer the in-bubble text classification.
                     if detection.label == "text_free" and (
