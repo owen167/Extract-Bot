@@ -832,7 +832,8 @@ def extract_chapter(
                     elif locked == "kor":
                         script = sum("\uac00" <= char <= "\ud7a3" for char in text)
                     symbols = sum(not char.isalnum() and not char.isspace() for char in text)
-                    if len(alnum) < 2 or script / max(1, len(alnum)) < 0.45 or symbols > len(text) * 0.38:
+                    minimum_narration_chars = 10 if kind == "NARRATION" else 2
+                    if len(alnum) < minimum_narration_chars or script / max(1, len(alnum)) < 0.45 or symbols > len(text) * 0.38:
                         rejected_low_quality += 1
                         continue
                 if len(text) < settings.min_text_length or not _is_plausible_text(text, crop, kind):

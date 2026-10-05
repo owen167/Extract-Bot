@@ -139,10 +139,10 @@ class BotCoreTests(unittest.TestCase):
             settings = ExtractionSettings(comic_model_path="unused", ocr_languages="kor", min_text_length=1)
             with patch("extractor._load_comic_detector", return_value=FakeComicDetector()), patch(
                 "extractor._load_segmenter", return_value=None
-            ), patch("extractor._ocr_crop", return_value="장면 설명"):
+            ), patch("extractor._ocr_crop", return_value="장면 설명이 계속됩니다"):
                 result = extract_chapter([str(image_path)], settings, "chapter")
             self.assertEqual(result.lines[0].kind, "NARRATION")
-            self.assertIn("OT: 장면 설명", result.output_text)
+            self.assertIn("OT: 장면 설명이 계속됩니다", result.output_text)
 
     def test_sfx_does_not_replace_overlapping_bubble_text(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
