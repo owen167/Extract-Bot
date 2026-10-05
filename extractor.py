@@ -373,6 +373,24 @@ def _ocr_crop(crop_bgr: np.ndarray, languages: str, config: str, min_confidence:
     return combined_text
 
 
+def _ocr_free_text_crop(
+    crop_bgr: np.ndarray, languages: str, config: str, min_confidence: float = 15.0
+) -> str:
+    """OCR narration/free text, including handwritten lines on a slanted page."""
+    candidates = [_ocr_crop(crop_bgr, languages, config, min_confidence)]
+    height, width = crop_bgr.shape[:2]
+    if width >= 120 and height >= 80:
+        center = (width / 2.0, height / 2.0)
+        for angle in (-18.0, -10.0, 10.0, 18.0):
+            matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
+            rotated = cv2.warpAffine(
+                crop_bgr, matrix, (width, height), borderMode=cv2.BORDER_REPLICATE
+            )
+            candidates.append(_ocr_crop(rotated, languages, config, min_confidence))
+    usable = [text for text in candidates if text.strip()]
+    return max(usable, key=lambda text: _text_quality_score(text), default="")
+
+
 def _detect_dot_sequence(image_rgb: np.ndarray) -> str:
     """Return dots when a crop contains only a clean horizontal dot sequence."""
     gray = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2GRAY)
@@ -643,7 +661,7 @@ def extract_chapter(
                     # watermarks, or speed-line texture rather than dialogue.
                     # Keep title/caption candidates only when the detector is
                     # reasonably certain; bubble text uses the stronger class.
-                    if detection.label == "text_free" and detection.confidence < 0.50:
+                    if detection.label == "text_free" and detection.confidence < 0.35:
                         continue
                     parent_bubbles = [
                         bubble for bubble in bubble_detections
@@ -748,7 +766,8 @@ def extract_chapter(
                 ocr_config = settings.ocr_config
                 if kind == "SFX":
                     ocr_config = os.getenv("SFX_OCR_CONFIG", "--oem 1 --psm 11")
-                text = _ocr_crop(
+                ocr_runner = _ocr_free_text_crop if kind in {"NARRATION", "SIDE_TEXT"} else _ocr_crop
+                text = ocr_runner(
                     crop,
                     locked_language or settings.ocr_languages,
                     ocr_config,
