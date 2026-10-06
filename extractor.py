@@ -693,6 +693,10 @@ def extract_chapter(
                 bubble_detections = [
                     detection for detection in comic_detections if detection.label == "bubble"
                 ]
+                first_bubble_y = min(
+                    (detection.bbox[1] for detection in bubble_detections),
+                    default=None,
+                )
                 for index, detection in enumerate(comic_detections):
                     if detection.label == "bubble":
                         continue
@@ -719,6 +723,15 @@ def extract_chapter(
                         ),
                         default=None,
                     )
+                    if (
+                        detection.label == "text_bubble"
+                        and parent_bubble is None
+                        and first_bubble_y is not None
+                        and detection.bbox[1] < first_bubble_y
+                    ):
+                        # Chapter titles/credits before the first real balloon
+                        # are not dialogue and should not lock or pollute OCR.
+                        continue
                     detected_shape = parent_bubble.bubble_shape if parent_bubble else None
                     kind = (
                         detected_shape
