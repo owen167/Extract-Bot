@@ -542,6 +542,8 @@ def _normalize_english_ocr(text: str) -> str:
         text = re.sub(rf"\b{re.escape(wrong)}\b", right, text, flags=re.IGNORECASE)
     text = re.sub(r"\bHYA[A-Z]*[/!]+", "HYAA!!", text, flags=re.IGNORECASE)
     text = re.sub(r"\bGO[/!]+", "GO!!!", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bTHEM/{2,}", "THEM!!!", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bFOLLOW ME/", "FOLLOW ME!", text, flags=re.IGNORECASE)
     text = re.sub(r"\bDONT LET\b", "DON'T LET", text, flags=re.IGNORECASE)
     return text
 
