@@ -44,6 +44,12 @@ def classify_bubble_shape(crop_bgr: np.ndarray) -> str:
         return "SPEECH"
     bbox_area = float(max(1, width * height))
     gray = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
+    edge_map = cv2.Canny(cv2.GaussianBlur(gray, (5, 5), 0), 35, 120)
+    # Black starburst thought balloons are often cropped at the page edge.
+    # Their dark interior plus dense radial border is stronger evidence than
+    # the crop-touching guard below.
+    if float(np.mean(gray < 55)) >= 0.60 and float(np.mean(edge_map > 0)) >= 0.12:
+        return "THOUGHT"
     bright = np.uint8(gray > 200)
     components, _, stats, _ = cv2.connectedComponentsWithStats(bright, 8)
     if components > 1:
@@ -54,7 +60,6 @@ def classify_bubble_shape(crop_bgr: np.ndarray) -> str:
         bright_rectangularity = bright_area / (bright_width * bright_height)
         if bright_area / max(1, crop_height * crop_width) >= 0.70 and bright_rectangularity >= 0.755:
             return "SQUARE"
-    edge_map = cv2.Canny(cv2.GaussianBlur(gray, (5, 5), 0), 35, 120)
     edge_density = float(np.mean(edge_map > 0))
     rectangularity = area / bbox_area
     circularity = (4.0 * np.pi * area) / (perimeter * perimeter)
