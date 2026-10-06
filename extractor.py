@@ -35,6 +35,7 @@ SHAPE_PRIORITY = {
 CREDIT_OVERLAY_TERMS = (
     "you can read the chapter", "thunderscans.com", "read the chapter on",
     "read en", "support us", "en-huala.com", "en-huala", "rikemia",
+    "ken-hiala", "kenhiala", "baekryongsan", ".com",
 )
 OCR_HIDDEN_DIRECTIONAL_CHARS = dict.fromkeys(
     ord(char) for char in "\u200b\u200c\u200d\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2069\ufeff"
@@ -845,6 +846,14 @@ def extract_chapter(
                 )
                 if (locked_language or settings.ocr_languages).lower() == "eng":
                     text = _normalize_english_ocr(text)
+                    if model_label == "text_free" and kind in {"NARRATION", "SIDE_TEXT"}:
+                        # On English webtoon pages, standalone detector boxes
+                        # are overwhelmingly watermarks, credits, or SFX;
+                        # never emit them as ordinary OT narration.
+                        rejected_low_quality += 1
+                        continue
+                    if text.strip().upper() in {"BGM", "SFX"}:
+                        kind = "SFX"
                 if _is_credit_overlay(text):
                     rejected_low_quality += 1
                     continue
