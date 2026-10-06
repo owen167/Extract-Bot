@@ -725,9 +725,9 @@ def extract_chapter(
                     )
                     if (
                         detection.label == "text_bubble"
-                        and parent_bubble is None
                         and first_bubble_y is not None
                         and detection.bbox[1] < first_bubble_y
+                        and (parent_bubble is None or parent_bubble.confidence < 0.80)
                     ):
                         # Chapter titles/credits before the first real balloon
                         # are not dialogue and should not lock or pollute OCR.
