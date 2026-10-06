@@ -32,7 +32,10 @@ SHAPE_PRIORITY = {
     "CAPTION": 2,
     "SPEECH": 1,
 }
-CREDIT_OVERLAY_TERMS = ("you can read the chapter", "thunderscans.com", "read the chapter on")
+CREDIT_OVERLAY_TERMS = (
+    "you can read the chapter", "thunderscans.com", "read the chapter on",
+    "read en", "support us", "en-huala.com", "en-huala", "rikemia",
+)
 OCR_HIDDEN_DIRECTIONAL_CHARS = dict.fromkeys(
     ord(char) for char in "\u200b\u200c\u200d\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2069\ufeff"
 )
@@ -730,6 +733,11 @@ def extract_chapter(
                     # this checkpoint. Prefer the in-bubble text classification.
                     if detection.label == "text_free" and (
                         any(
+                            other.label == "text_bubble"
+                            and (_box_iou(other.bbox, detection.bbox) >= 0.05 or _box_center_inside(detection.bbox, other.bbox))
+                            for other in comic_detections
+                        )
+                        or any(
                             item[1] == "text_bubble"
                             and (_box_iou(item[3], detection.bbox) >= 0.05 or _box_center_inside(detection.bbox, item[3]))
                             for item in candidates
@@ -784,7 +792,17 @@ def extract_chapter(
 
             text_candidates += len(candidates)
             if locked_language is None and candidates:
-                first_candidate = min(candidates, key=lambda item: (item[3][1], item[3][0]))
+                # Credits and SFX can appear above the first dialogue balloon.
+                # Lock the chapter language from a real bubble/text-bubble only.
+                dialogue_candidates = [
+                    item for item in candidates
+                    if item[1] in {"bubble", "text_bubble"}
+                    and item[2] not in {"SFX", "NARRATION", "SIDE_TEXT"}
+                ]
+                first_candidate = min(
+                    dialogue_candidates or candidates,
+                    key=lambda item: (item[3][1], item[3][0]),
+                )
                 first_bbox = first_candidate[3]
                 first_crop = (
                     _masked_crop(image, first_candidate[4], first_bbox)
