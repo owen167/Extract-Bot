@@ -732,6 +732,10 @@ def extract_chapter(
                         # Chapter titles/credits before the first real balloon
                         # are not dialogue and should not lock or pollute OCR.
                         continue
+                    if detection.label == "text_bubble" and parent_bubble is None and bubble_detections:
+                        # Without a matching border this is usually action
+                        # lettering or panel art, not a dialogue bubble.
+                        continue
                     detected_shape = parent_bubble.bubble_shape if parent_bubble else None
                     kind = (
                         detected_shape
