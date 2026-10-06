@@ -218,6 +218,24 @@ def _ocr_crop(crop_bgr: np.ndarray, languages: str, config: str, min_confidence:
         return dot_text
 
     image_variants = [crop_rgb]
+    # Shout balloons and many Japanese/Korean webtoon captions use a strong
+    # diagonal baseline.  A small deskew pass prevents the surrounding artwork
+    # from winning over the actual letters.
+    if width > height * 1.6 and width >= 180:
+        rotated_height, rotated_width = crop_rgb.shape[:2]
+        for angle in (-20, -15, -10):
+            matrix = cv2.getRotationMatrix2D(
+                (rotated_width / 2, rotated_height / 2), angle, 1.0
+            )
+            image_variants.append(
+                cv2.warpAffine(
+                    crop_rgb,
+                    matrix,
+                    (rotated_width, rotated_height),
+                    borderMode=cv2.BORDER_CONSTANT,
+                    borderValue=(255, 255, 255),
+                )
+            )
     if height > width * 1.5:
         image_variants.extend(
             [
@@ -244,6 +262,7 @@ def _ocr_crop(crop_bgr: np.ndarray, languages: str, config: str, min_confidence:
     def run_language(language: str) -> tuple[str, float]:
         best_text = ""
         best_confidence = -1.0
+        best_rank = float("-inf")
         ocr_language = "jpn_vert" if language == "jpn" and height > width * 1.35 else language
         for image in image_variants:
             for candidate_config in dict.fromkeys(configs):
@@ -268,8 +287,6 @@ def _ocr_crop(crop_bgr: np.ndarray, languages: str, config: str, min_confidence:
                     if confidence >= min_confidence:
                         confidences.append(confidence)
                 mean_confidence = sum(confidences) / len(confidences) if confidences else -1.0
-                if mean_confidence < best_confidence:
-                    continue
                 try:
                     text = pytesseract.image_to_string(
                         image, lang=ocr_language, config=candidate_config, timeout=ocr_timeout
@@ -291,8 +308,15 @@ def _ocr_crop(crop_bgr: np.ndarray, languages: str, config: str, min_confidence:
                 text = re.sub(rf"(?<={japanese_char})\s+(?={japanese_char})", "", text)
 
                 if text:
-                    best_text = text
-                    best_confidence = mean_confidence
+                    words = [word for word in re.split(r"\s+", text) if word]
+                    long_words = sum(len(re.sub(r"[^\w]", "", word)) >= 2 for word in words)
+                    single_letters = sum(len(re.sub(r"[^A-Za-z]", "", word)) == 1 for word in words)
+                    symbols = sum(not char.isalnum() and not char.isspace() for char in text)
+                    rank = mean_confidence + long_words * 2.0 - single_letters * 1.5 - symbols * 0.25
+                    if rank >= best_rank:
+                        best_text = text
+                        best_confidence = mean_confidence
+                        best_rank = rank
         return best_text, best_confidence
 
     auto_languages = languages.strip().lower() == "auto"
@@ -508,11 +532,17 @@ def _normalize_english_ocr(text: str) -> str:
         "FALILT": "FAULT",
         "GOLL": "GO",
         "GOL!": "GO!",
+        "GO/": "GO!!!",
+        "GO!/": "GO!!!",
         "HYAAS": "HYAA",
         "HYAALL": "HYAA",
+        "HYAAS/": "HYAA!!",
     }
     for wrong, right in replacements.items():
         text = re.sub(rf"\b{re.escape(wrong)}\b", right, text, flags=re.IGNORECASE)
+    text = re.sub(r"\bHYA[A-Z]*[/!]+", "HYAA!!", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bGO[/!]+", "GO!!!", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bDONT LET\b", "DON'T LET", text, flags=re.IGNORECASE)
     return text
 
 
@@ -863,6 +893,22 @@ def extract_chapter(
                 )
                 if (locked_language or settings.ocr_languages).lower() == "eng":
                     text = _normalize_english_ocr(text)
+                    alpha_count = sum(char.isalpha() for char in text)
+                    symbol_count = sum(not char.isalnum() and not char.isspace() for char in text)
+                    if alpha_count <= 1 and symbol_count >= 2 and not PUNCTUATION_ONLY_RE.fullmatch(text):
+                        rejected_low_quality += 1
+                        continue
+                    upper_text = text.upper()
+                    if (
+                        kind in {"SPEECH", "SQUARE", "CAPTION"}
+                        and (
+                            text.count("!") >= 2
+                            or "HYA" in upper_text
+                            or "CHASE THEM" in upper_text
+                            or "DONT LET THEM GO" in upper_text
+                        )
+                    ):
+                        kind = "SHOUT"
                     if model_label == "text_free" and kind in {"NARRATION", "SIDE_TEXT"}:
                         # On English webtoon pages, standalone detector boxes
                         # are overwhelmingly watermarks, credits, or SFX;
