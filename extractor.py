@@ -694,7 +694,7 @@ def extract_chapter(
                     detection for detection in comic_detections if detection.label == "bubble"
                 ]
                 first_bubble_y = min(
-                    (detection.bbox[1] for detection in bubble_detections),
+                    (detection.bbox[1] for detection in bubble_detections if detection.confidence >= 0.80),
                     default=None,
                 )
                 for index, detection in enumerate(comic_detections):
