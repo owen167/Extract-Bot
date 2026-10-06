@@ -499,6 +499,22 @@ def _is_credit_overlay(text: str) -> bool:
     return any(term in normalized for term in CREDIT_OVERLAY_TERMS)
 
 
+def _normalize_english_ocr(text: str) -> str:
+    """Repair only recurring, high-confidence stylized English OCR confusions."""
+    replacements = {
+        "THIS GLY": "THIS GUY",
+        "THIS G1Y": "THIS GUY",
+        "FALILT": "FAULT",
+        "GOLL": "GO",
+        "GOL!": "GO!",
+        "HYAAS": "HYAA",
+        "HYAALL": "HYAA",
+    }
+    for wrong, right in replacements.items():
+        text = re.sub(rf"\b{re.escape(wrong)}\b", right, text, flags=re.IGNORECASE)
+    return text
+
+
 def _output_language(lines: list[ExtractedLine], configured: str) -> str:
     configured = configured.strip().lower()
     names = {
@@ -827,6 +843,8 @@ def extract_chapter(
                     ocr_config,
                     getattr(settings, "ocr_min_confidence", 15.0),
                 )
+                if (locked_language or settings.ocr_languages).lower() == "eng":
+                    text = _normalize_english_ocr(text)
                 if _is_credit_overlay(text):
                     rejected_low_quality += 1
                     continue
@@ -851,7 +869,8 @@ def extract_chapter(
                         script = sum("\uac00" <= char <= "\ud7a3" for char in text)
                     symbols = sum(not char.isalnum() and not char.isspace() for char in text)
                     minimum_narration_chars = 10 if kind == "NARRATION" else 2
-                    if len(alnum) < minimum_narration_chars or script / max(1, len(alnum)) < 0.45 or symbols > len(text) * 0.38:
+                    symbol_limit = 0.25 if locked == "eng" else 0.38
+                    if len(alnum) < minimum_narration_chars or script / max(1, len(alnum)) < 0.45 or symbols > len(text) * symbol_limit:
                         rejected_low_quality += 1
                         continue
                 if len(text) < settings.min_text_length or not _is_plausible_text(text, crop, kind):
